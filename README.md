@@ -2,6 +2,8 @@
 
 Interactive genomics review workspace for VCF-driven analysis, grounded summaries, Studio cards, and follow-up chat.
 
+![ChatGenome workspace preview](docs/chatgenome-ui-preview.svg)
+
 This MVP is a starting point for an OpenEvidence-like genomics assistant:
 
 - upload a `VCF` or `VCF.gz`
@@ -10,6 +12,7 @@ This MVP is a starting point for an OpenEvidence-like genomics assistant:
 - propose next analysis steps with a rule-driven engine
 - return a grounded response payload that a chat UI can render
 - run a GPT-backed intake conversation before analysis starts
+- combine backend grounded summaries with Studio-derived review context for the first answer
 - keep IGV and annotation detail available below the summary
 
 ## Quick Start For Contributors

@@ -491,10 +491,12 @@ export default function Page() {
   const [isComposing, setIsComposing] = useState(false);
   const [analysisQa, setAnalysisQa] = useState<AnalysisQuestionTurn[]>([]);
   const [followUpAnswer, setFollowUpAnswer] = useState<string | null>(null);
+  const [initialGroundedAnswer, setInitialGroundedAnswer] = useState<string | null>(null);
   const [activeStudioView, setActiveStudioView] = useState<StudioView | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const studioCanvasRef = useRef<HTMLElement | null>(null);
   const chatStreamRef = useRef<HTMLDivElement | null>(null);
+  const initialSummaryRequestRef = useRef<string | null>(null);
 
   function addMessage(message: ChatMessage) {
     setMessages((current) => [...current, message]);
@@ -537,10 +539,12 @@ export default function Page() {
     setAttachedFile(file);
     setAnalysis(null);
     setFollowUpAnswer(null);
+    setInitialGroundedAnswer(null);
     setAnalysisQa([]);
     setActiveStudioView(null);
     setSelectedAnnotationIndex(0);
     setAnnotationSearch("");
+    initialSummaryRequestRef.current = null;
     setOptionsAsked(true);
     setPreAnalysisPrompt("Please input VCF analysis scope and its range..");
     setError(null);
@@ -601,18 +605,13 @@ export default function Page() {
       const payload: AnalysisResponse = await response.json();
       setAnalysis(payload);
       setFollowUpAnswer(null);
+      setInitialGroundedAnswer(null);
       setAnalysisQa([]);
       setActiveStudioView(null);
       setSelectedAnnotationIndex(0);
       setOptionsAsked(false);
       setComposerText("");
-      setStatus("Grounded summary ready");
-      addMessage({
-        role: "assistant",
-        content:
-          "분석이 끝났습니다. 아래에 grounded summary와 references를 정리해두었고, 맨 아래 IGV에서 같은 annotation을 바로 확인할 수 있습니다.",
-        kind: "summary",
-      });
+      setStatus("Preparing grounded summary...");
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
       setError(message);
@@ -785,7 +784,9 @@ export default function Page() {
       ? 0
       : Math.min(selectedAnnotationIndex, searchedAnnotations.length - 1);
   const selectedAnnotation = searchedAnnotations[safeSelectedIndex] ?? searchedAnnotations[0] ?? null;
-  const summaryText = analysis ? formatSummaryWithCitations(analysis.draft_answer, analysis.references) : null;
+  const summaryText = analysis
+    ? formatSummaryWithCitations(initialGroundedAnswer ?? analysis.draft_answer, analysis.references)
+    : null;
   const displayedAnswer = followUpAnswer ?? summaryText;
   const hasInteractiveState = Boolean(attachedFile || analysis || messages.length > 1);
   const latestStatusMessage =
@@ -799,6 +800,9 @@ export default function Page() {
     }
     if (status === "Preparing analysis...") {
       return "The workflow reply was accepted. ChatGenome is now preparing the grounded VCF analysis run.";
+    }
+    if (status === "Preparing grounded summary...") {
+      return "The VCF analysis is finished. ChatGenome is now composing the first grounded summary from the current Studio results.";
     }
     if (status === "Scope received") {
       return "The scope and range were understood. If analysis does not start automatically, refine the instruction in chat.";
@@ -827,6 +831,7 @@ export default function Page() {
     status === "Generating answer..." ||
     status === "Parsing scope and range..." ||
     status === "Preparing analysis..." ||
+    status === "Preparing grounded summary..." ||
     status === "Analyzing" ||
     status === "File attached" ||
     status === "Scope received" ||
@@ -1109,6 +1114,46 @@ export default function Page() {
     selectedAnnotation,
     symbolicAnnotations,
   ]);
+
+  useEffect(() => {
+    async function generateInitialGroundedSummary() {
+      if (!analysis) {
+        return;
+      }
+      setStatus("Preparing grounded summary...");
+      try {
+        const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/chat/analysis`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question:
+              "Provide an initial grounded summary of this VCF analysis. Combine the backend draft_answer with the current studio_context explicitly, including QC, clinical coverage, symbolic ALT review, ROH/recessive review, candidate variants, ClinVar review, and VEP consequence.",
+            analysis,
+            history: [],
+            studio_context: studioContext,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        const payload = await response.json();
+        setInitialGroundedAnswer(payload.answer);
+        setStatus("Grounded summary ready");
+      } catch {
+        setInitialGroundedAnswer(null);
+        setStatus("Grounded summary ready");
+      }
+    }
+
+    if (!analysis) {
+      return;
+    }
+    if (initialSummaryRequestRef.current === analysis.analysis_id) {
+      return;
+    }
+    initialSummaryRequestRef.current = analysis.analysis_id;
+    void generateInitialGroundedSummary();
+  }, [analysis, apiBase, studioContext]);
 
   function openStudioView(view: StudioView) {
     setActiveStudioView(view);

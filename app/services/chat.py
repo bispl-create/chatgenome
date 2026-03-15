@@ -30,6 +30,7 @@ def _compact_analysis_context(payload: AnalysisChatRequest) -> dict[str, object]
     analysis = payload.analysis
     context = {
         "analysis_id": analysis.analysis_id,
+        "draft_answer": analysis.draft_answer,
         "facts": {
             "file_name": analysis.facts.file_name,
             "genome_build_guess": analysis.facts.genome_build_guess,
@@ -83,6 +84,52 @@ def _studio_guided_answer(payload: AnalysisChatRequest) -> AnalysisChatResponse 
 
     question = payload.question.lower()
     citations = [item.id for item in payload.analysis.references[:3]]
+
+    if "initial grounded summary" in question or "studio-grounded summary" in question:
+        backend_summary = (payload.analysis.draft_answer or "").strip()
+        qc = studio.get("qc_summary") or {}
+        coverage = studio.get("clinical_coverage") or []
+        symbolic = studio.get("symbolic_alt_review") or {}
+        roh = studio.get("roh_review") or {}
+        candidates = studio.get("candidate_variants") or []
+        clinvar = studio.get("clinvar_review") or []
+        consequence = studio.get("vep_consequence") or []
+
+        coverage_lines = [f"- {item.get('label')}: {item.get('detail')}" for item in coverage[:4]]
+        candidate_lines = [
+            f"- {item.get('gene') or 'Unknown'} {item.get('locus')} | score {item.get('score')} | consequence={item.get('consequence')} | ClinVar={item.get('clinical_significance')} | in ROH={item.get('in_roh')}"
+            for item in candidates[:3]
+        ]
+        roh_lines = [
+            f"- {item.get('contig')}:{item.get('start_1based')}-{item.get('end_1based')} | {(item.get('length_bp') or 0) / 1_000_000:.2f} Mb | markers {item.get('marker_count')} | quality {item.get('quality')}"
+            for item in (roh.get("segments") or [])[:3]
+        ]
+        clinvar_lines = [f"- {item.get('label')}: {item.get('count')}" for item in clinvar[:4]]
+        consequence_lines = [f"- {item.get('label')}: {item.get('count')}" for item in consequence[:4]]
+        answer = (
+            f"This VCF contains {payload.analysis.facts.record_count} records across {len(payload.analysis.facts.contigs)} contig(s) "
+            f"and appears to align to {payload.analysis.facts.genome_build_guess or 'an unknown genome build'}. "
+            "The summary below reflects both the backend draft summary and the current Studio-derived review state.\n\n"
+            "## Backend grounded summary\n"
+            f"{backend_summary if backend_summary else '- No backend draft summary is available.'}\n\n"
+            "## QC and file status\n"
+            f"- PASS rate: {((qc.get('pass_rate') or 0) * 100):.1f}%\n"
+            f"- Ti/Tv ratio: {qc.get('ti_tv') if qc.get('ti_tv') is not None else 'n/a'}\n"
+            f"- Missing genotype rate: {((qc.get('missing_gt_rate') or 0) * 100):.1f}%\n"
+            f"- Het/HomAlt ratio: {qc.get('het_hom_alt_ratio') if qc.get('het_hom_alt_ratio') is not None else 'n/a'}\n\n"
+            "## Annotation coverage\n"
+            f"{chr(10).join(coverage_lines) if coverage_lines else '- Coverage detail is not available.'}\n\n"
+            "## Functional and clinical review\n"
+            f"{chr(10).join(consequence_lines) if consequence_lines else '- Consequence summary is not available.'}\n"
+            f"{chr(10).join(clinvar_lines) if clinvar_lines else '- ClinVar distribution is not available.'}\n\n"
+            "## Candidate and recessive signals\n"
+            f"{chr(10).join(candidate_lines) if candidate_lines else '- No ranked candidate variants are available yet.'}\n"
+            f"{chr(10).join(roh_lines) if roh_lines else '- No ROH segments are currently available.'}\n\n"
+            "## Special record handling\n"
+            f"- Symbolic ALT records separated for review: {symbolic.get('count', 0)}\n\n"
+            f"Grounding references: {', '.join(citations) if citations else 'foundational references'}."
+        )
+        return AnalysisChatResponse(answer=answer, citations=citations, used_fallback=False)
 
     if "roh" in question or "recessive" in question or "열성" in payload.question or "동형접합" in payload.question:
         roh = studio.get("roh_review") or {}
