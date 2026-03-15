@@ -204,6 +204,7 @@ For another developer picking this up:
 - start with [HANDOFF.md](/Users/jongcye/Documents/Codex/workspace/bioinformatics_vcf_evidence_mvp/HANDOFF.md)
 - use [CONTRIBUTING.md](/Users/jongcye/Documents/Codex/workspace/bioinformatics_vcf_evidence_mvp/CONTRIBUTING.md) for setup and checks
 - keep `.env` local and use `.env.example` as the template
+- install the Codex skill at `skills/chatgenome-dev/SKILL.md` if they want repo-specific Codex guidance
 
 ## GPT Workflow And Analysis Chat
 
