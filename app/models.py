@@ -1,0 +1,282 @@
+from __future__ import annotations
+
+from typing import Any, Literal, Optional
+
+from pydantic import BaseModel, Field
+
+
+class FromPathRequest(BaseModel):
+    vcf_path: str = Field(..., description="Absolute path to a VCF or VCF.gz file")
+    annotation_scope: Literal["representative", "all"] = Field(
+        default="representative",
+        description="Whether to annotate only representative variants or iterate through the whole file.",
+    )
+    annotation_limit: Optional[int] = Field(
+        default=None,
+        description="Optional cap on the number of variants to annotate when scope is 'all'.",
+    )
+
+
+class ReferenceItem(BaseModel):
+    id: str
+    title: str
+    source: str
+    url: str
+    note: str
+
+
+class RecommendationItem(BaseModel):
+    id: str
+    title: str
+    rationale: str
+    action: str
+    priority: str
+
+
+class VariantExample(BaseModel):
+    contig: str
+    pos_1based: int
+    ref: str
+    alts: list[str]
+    genotype: str
+    variant_class: str
+
+
+class TranscriptAnnotation(BaseModel):
+    transcript_id: str
+    transcript_biotype: str
+    canonical: str
+    exon: str
+    intron: str
+    hgvsc: str
+    hgvsp: str
+    protein_id: str
+    amino_acids: str
+    codons: str
+
+
+class VariantAnnotation(BaseModel):
+    contig: str
+    pos_1based: int
+    ref: str
+    alts: list[str]
+    genotype: str
+    rsid: str
+    gene: str
+    consequence: str
+    transcript_id: str
+    transcript_biotype: str
+    canonical: str
+    exon: str
+    intron: str
+    hgvsc: str
+    hgvsp: str
+    protein_id: str
+    amino_acids: str
+    codons: str
+    transcript_options: list[TranscriptAnnotation]
+    clinical_significance: str
+    maf: str
+    clinvar_accession: str
+    clinvar_review_status: str
+    clinvar_conditions: str
+    gnomad_af: str
+    source_url: str
+
+
+class QualityControlMetrics(BaseModel):
+    pass_rate: Optional[float]
+    missing_gt_rate: Optional[float]
+    multi_allelic_rate: Optional[float]
+    symbolic_alt_rate: Optional[float]
+    snv_fraction: Optional[float]
+    indel_fraction: Optional[float]
+    transition_transversion_ratio: Optional[float]
+    het_hom_alt_ratio: Optional[float]
+    mean_dp: Optional[float]
+    mean_gq: Optional[float]
+    records_with_dp_rate: Optional[float]
+    records_with_gq_rate: Optional[float]
+
+
+class AnalysisFacts(BaseModel):
+    file_name: str
+    vcf_version: Optional[str]
+    genome_build_guess: Optional[str]
+    samples: list[str]
+    contigs: list[dict[str, Any]]
+    record_count: int
+    chrom_counts: dict[str, int]
+    variant_types: dict[str, int]
+    genotype_counts: dict[str, int]
+    filter_counts: dict[str, int]
+    qc: QualityControlMetrics
+    position_range_1based: list[int]
+    example_variants: list[VariantExample]
+    warnings: list[str]
+
+
+class RohSegment(BaseModel):
+    sample: str
+    contig: str
+    start_1based: int
+    end_1based: int
+    length_bp: int
+    marker_count: int
+    quality: float
+
+
+class AnalysisResponse(BaseModel):
+    analysis_id: str
+    facts: AnalysisFacts
+    annotations: list[VariantAnnotation]
+    roh_segments: list[RohSegment]
+    references: list[ReferenceItem]
+    recommendations: list[RecommendationItem]
+    ui_cards: list[dict[str, Any]]
+    draft_answer: str
+
+
+class AnalysisJobResponse(BaseModel):
+    job_id: str
+    status: str
+    result: Optional[AnalysisResponse] = None
+    error: Optional[str] = None
+
+
+class ChatTurn(BaseModel):
+    role: str
+    content: str
+
+
+class AnalysisChatRequest(BaseModel):
+    question: str
+    analysis: AnalysisResponse
+    history: list[ChatTurn] = []
+    studio_context: dict[str, Any] = {}
+
+
+class AnalysisChatResponse(BaseModel):
+    answer: str
+    citations: list[str]
+    used_fallback: bool
+
+
+class WorkflowStartRequest(BaseModel):
+    file_name: str
+
+
+class WorkflowReplyRequest(BaseModel):
+    file_name: str
+    message: str
+
+
+class WorkflowAgentResponse(BaseModel):
+    assistant_message: str
+    should_start_analysis: bool
+    parsed_scope: Literal["representative", "all"]
+    parsed_limit: Optional[int] = None
+    used_fallback: bool
+    model: str
+
+
+class FilterRequest(BaseModel):
+    vcf_path: str = Field(..., description="Absolute path to the input VCF or VCF.gz")
+    tool: Literal["bcftools", "gatk"]
+    expression: str = Field(..., description="Filter expression for bcftools or GATK VariantFiltration")
+    filter_name: str = Field(default="LowQual", description="FILTER label to attach when soft filtering")
+    mode: Literal["soft_filter", "include", "exclude"] = Field(
+        default="soft_filter",
+        description="Filtering mode. GATK currently supports only soft_filter.",
+    )
+    output_prefix: Optional[str] = Field(
+        default=None,
+        description="Optional output prefix. Files are written under the app filter output directory.",
+    )
+
+
+class FilterResponse(BaseModel):
+    tool: str
+    input_path: str
+    output_path: str
+    index_path: Optional[str]
+    command_preview: str
+
+
+class SnpEffRequest(BaseModel):
+    vcf_path: str = Field(..., description="Absolute path to the input VCF or VCF.gz")
+    genome: str = Field(default="GRCh37.75", description="SnpEff genome database key")
+    output_prefix: Optional[str] = Field(
+        default=None,
+        description="Optional output prefix. Files are written under the app snpEff output directory.",
+    )
+    parse_limit: int = Field(default=25, description="Maximum number of annotated records to parse for preview")
+
+
+class SnpEffAnnEntry(BaseModel):
+    allele: str
+    annotation: str
+    impact: str
+    gene_name: str
+    gene_id: str
+    feature_type: str
+    feature_id: str
+    transcript_biotype: str
+    rank: str
+    hgvs_c: str
+    hgvs_p: str
+
+
+class SnpEffAnnotatedRecord(BaseModel):
+    contig: str
+    pos_1based: int
+    ref: str
+    alt: str
+    ann: list[SnpEffAnnEntry]
+
+
+class SnpEffResponse(BaseModel):
+    tool: str
+    genome: str
+    input_path: str
+    output_path: str
+    index_path: Optional[str]
+    command_preview: str
+    parsed_records: list[SnpEffAnnotatedRecord]
+
+
+class RPlotRequest(BaseModel):
+    vcf_path: str = Field(..., description="Absolute path to the input VCF or VCF.gz")
+    output_prefix: Optional[str] = Field(
+        default=None,
+        description="Optional output prefix. Files are written under the app R plot output directory.",
+    )
+    density_bin_size: int = Field(default=1_000_000, description="Bin size for CMplot density rendering")
+
+
+class CmplotAssociationRequest(BaseModel):
+    association_path: str = Field(
+        ...,
+        description="Absolute path to a TSV/CSV table with GWAS-style association columns such as SNP/CHR/BP/P.",
+    )
+    output_prefix: Optional[str] = Field(
+        default=None,
+        description="Optional output prefix. Files are written under the app R plot output directory.",
+    )
+
+
+class RPlotArtifact(BaseModel):
+    plot_type: str
+    title: str
+    image_path: str
+    api_path: str
+    note: str
+
+
+class RPlotResponse(BaseModel):
+    tool: str
+    input_path: str
+    output_dir: str
+    command_preview: str
+    artifacts: list[RPlotArtifact]
+    warnings: list[str]

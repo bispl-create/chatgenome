@@ -1,0 +1,36 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="leftHelix" x1="26" y1="14" x2="64" y2="114" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FF5C76"/>
+      <stop offset="1" stop-color="#D91C52"/>
+    </linearGradient>
+    <linearGradient id="rightHelix" x1="98" y1="14" x2="60" y2="114" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#57B7FF"/>
+      <stop offset="1" stop-color="#2573FF"/>
+    </linearGradient>
+    <linearGradient id="rung" x1="42" y1="0" x2="78" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFE798"/>
+      <stop offset="1" stop-color="#FFC857"/>
+    </linearGradient>
+    <filter id="softGlow" x="-20" y="-20" width="168" height="168" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feBlend in="SourceGraphic" in2="blur" mode="screen"/>
+    </filter>
+  </defs>
+  <g filter="url(#softGlow)">
+    <path d="M33 15C52 24 56 39 56 50C56 68 43 77 36 91C29 103 29 113 36 122" stroke="url(#leftHelix)" stroke-width="10" stroke-linecap="round"/>
+    <path d="M95 15C76 24 72 39 72 50C72 68 85 77 92 91C99 103 99 113 92 122" stroke="url(#rightHelix)" stroke-width="10" stroke-linecap="round"/>
+    <path d="M45 26H82" stroke="url(#rung)" stroke-width="6" stroke-linecap="round"/>
+    <path d="M41 40H86" stroke="url(#rung)" stroke-width="6" stroke-linecap="round"/>
+    <path d="M40 55H88" stroke="url(#rung)" stroke-width="6" stroke-linecap="round"/>
+    <path d="M43 70H85" stroke="url(#rung)" stroke-width="6" stroke-linecap="round"/>
+    <path d="M47 85H81" stroke="url(#rung)" stroke-width="6" stroke-linecap="round"/>
+    <path d="M51 100H77" stroke="url(#rung)" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="18" cy="88" r="8" fill="#F4436C"/>
+    <circle cx="110" cy="73" r="7" fill="#F4436C"/>
+    <circle cx="104" cy="28" r="3" fill="#F4436C"/>
+    <circle cx="93" cy="118" r="3.5" fill="#53A9FF"/>
+    <circle cx="27" cy="107" r="4" fill="#53A9FF"/>
+    <circle cx="86" cy="14" r="4.5" fill="#53A9FF"/>
+  </g>
+</svg>
