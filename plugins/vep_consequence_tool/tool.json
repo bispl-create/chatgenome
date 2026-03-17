@@ -1,0 +1,8 @@
+{
+  "name": "vep_consequence_tool",
+  "description": "Builds a compact VEP consequence distribution from annotated variants.",
+  "task": "vep-consequence",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "plugin"
+}

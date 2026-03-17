@@ -1021,8 +1021,49 @@ button {
   min-height: 0;
 }
 
+.sourcePanelBody {
+  padding: 18px 20px;
+}
+
 .studioPanelBody {
   overflow-y: auto;
+}
+
+.sourceSplitPanel {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
+}
+
+.sourceSplitSection {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-radius: 22px;
+  border: 1px solid rgba(31, 35, 41, 0.08);
+  background: rgba(255, 253, 250, 0.72);
+  overflow: hidden;
+}
+
+.sourceSectionHeader {
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(31, 35, 41, 0.08);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.sourceSectionHeader h3 {
+  margin: 0;
+  font-size: 0.94rem;
+  font-weight: 700;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.sourceSectionBody {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 18px 18px;
 }
 
 .sourceAddButton {
@@ -1095,6 +1136,136 @@ button {
   color: var(--muted);
   font-size: 0.92rem;
   line-height: 1.5;
+}
+
+.sourceRegistry {
+  margin-top: 16px;
+}
+
+.sourceRegistry > span {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.sourceRegistryChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sourceRegistryChip {
+  border-radius: 999px;
+  border: 1px solid rgba(44, 106, 255, 0.18);
+  background: rgba(44, 106, 255, 0.08);
+  color: var(--accent);
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+.toolRegistryDetails {
+  margin: 0;
+  border-radius: 16px;
+  border: 1px solid rgba(31, 35, 41, 0.08);
+  background: #fffdfa;
+  overflow: hidden;
+}
+
+.toolRegistrySummary {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: left;
+}
+
+.toolRegistryCount {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(34, 63, 88, 0.12);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+}
+
+.toolRegistryMenu {
+  display: grid;
+  gap: 8px;
+  padding: 0 16px 16px;
+}
+
+.toolRegistryItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(31, 35, 41, 0.08);
+  background: rgba(44, 106, 255, 0.04);
+}
+
+.toolRegistryName {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+  color: var(--accent);
+}
+
+.toolRegistryTask {
+  font-size: 0.74rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.toolRegistryEmpty,
+.toolUsageEmpty {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.toolUsageLog {
+  margin-top: 16px;
+}
+
+.toolUsageLog > span {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.toolUsageList {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.toolUsageList li {
+  font-size: 0.76rem;
+  line-height: 1.45;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 .chatPanelBody {
@@ -1751,5 +1922,20 @@ button {
   .igvToolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .sourcePanel,
+  .chatPanel,
+  .studioPanel {
+    height: auto;
+  }
+
+  .sourceSplitPanel {
+    grid-template-rows: auto auto;
+    height: auto;
+  }
+
+  .sourceSectionBody {
+    overflow: visible;
   }
 }

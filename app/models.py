@@ -126,15 +126,62 @@ class RohSegment(BaseModel):
     quality: float
 
 
+class RankedCandidate(BaseModel):
+    item: VariantAnnotation
+    score: int
+    in_roh: bool
+
+
+class CountSummaryItem(BaseModel):
+    label: str
+    count: int
+
+
+class DetailedCountSummaryItem(BaseModel):
+    label: str
+    count: int
+    detail: str
+
+
+class SymbolicAltExample(BaseModel):
+    locus: str
+    gene: str
+    alts: list[str]
+    consequence: str
+    genotype: str
+
+
+class SymbolicAltSummary(BaseModel):
+    count: int
+    examples: list[SymbolicAltExample] = []
+
+
+class ToolInfo(BaseModel):
+    name: str
+    description: str
+    task: str
+    modality: str
+    approval_required: bool = False
+    source: str = "plugin"
+
+
 class AnalysisResponse(BaseModel):
     analysis_id: str
     facts: AnalysisFacts
     annotations: list[VariantAnnotation]
     roh_segments: list[RohSegment]
+    candidate_variants: list[RankedCandidate] = []
+    clinvar_summary: list[CountSummaryItem] = []
+    consequence_summary: list[CountSummaryItem] = []
+    clinical_coverage_summary: list[DetailedCountSummaryItem] = []
+    filtering_summary: list[DetailedCountSummaryItem] = []
+    symbolic_alt_summary: Optional[SymbolicAltSummary] = None
     references: list[ReferenceItem]
     recommendations: list[RecommendationItem]
     ui_cards: list[dict[str, Any]]
     draft_answer: str
+    used_tools: list[str] = []
+    tool_registry: list[ToolInfo] = []
 
 
 class AnalysisJobResponse(BaseModel):

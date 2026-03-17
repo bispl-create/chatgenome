@@ -23,6 +23,10 @@ This MVP is a starting point for an OpenEvidence-like genomics assistant:
 4. Install Python and frontend dependencies.
 5. Start the API and frontend.
 
+If you are adding a new analysis tool, use the collaborator guide:
+
+- [TOOL_PLUGIN_GUIDE.md](/Users/jongcye/Documents/Codex/workspace/bioinformatics_vcf_evidence_mvp/docs/TOOL_PLUGIN_GUIDE.md)
+
 ```bash
 git clone https://github.com/bispl-create/chatgenome.git
 cd chatgenome

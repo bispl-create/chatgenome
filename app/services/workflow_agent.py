@@ -4,8 +4,12 @@ import json
 import os
 import re
 import urllib.request
+from pathlib import Path
 
 from app.models import WorkflowAgentResponse, WorkflowReplyRequest, WorkflowStartRequest
+
+
+SKILL_PATH = Path(__file__).resolve().parents[2] / "skills" / "chatgenome-orchestrator" / "SKILL.md"
 
 
 def _model_name() -> str:
@@ -22,12 +26,34 @@ def _fallback_parse(message: str) -> tuple[str, int | None]:
     return scope, limit
 
 
+def _initial_scope_prompt_template() -> str:
+    default = (
+        "`{file_name}` 파일을 받았습니다. VCF analysis scope와 range(limit)를 입력해 주세요. "
+        "별도 지시가 없으면 `representative`로 시작합니다. 예: `all로 200개`, `representative로 진행`."
+    )
+    try:
+        text = SKILL_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return default
+
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != "### Initial scope prompt":
+            continue
+        for candidate in lines[index + 1 :]:
+            stripped = candidate.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#"):
+                return default
+            return stripped
+    return default
+
+
 def start_workflow(payload: WorkflowStartRequest) -> WorkflowAgentResponse:
+    template = _initial_scope_prompt_template()
     return WorkflowAgentResponse(
-        assistant_message=(
-            f"`{payload.file_name}` 파일을 받았습니다. annotation scope와 range(limit)를 알려주세요. "
-            "별도 지시가 없으면 representative로 시작합니다. 예: `all로 200개`, `representative로 진행`."
-        ),
+        assistant_message=template.format(file_name=payload.file_name),
         should_start_analysis=False,
         parsed_scope="representative",
         parsed_limit=None,

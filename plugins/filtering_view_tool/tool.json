@@ -1,0 +1,8 @@
+{
+  "name": "filtering_view_tool",
+  "description": "Builds searchable variant-table summary metrics for the filtering and triage view.",
+  "task": "filtering-view",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "plugin"
+}

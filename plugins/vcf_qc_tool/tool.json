@@ -1,0 +1,8 @@
+{
+  "name": "vcf_qc_tool",
+  "description": "Summarize a VCF into deterministic QC, variant-type, genotype, and representative-example facts.",
+  "task": "vcf-qc",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "internal"
+}

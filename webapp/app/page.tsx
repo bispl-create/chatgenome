@@ -66,6 +66,39 @@ type AnalysisResponse = {
     };
   };
   annotations: VariantAnnotation[];
+  candidate_variants?: Array<{
+    item: VariantAnnotation;
+    score: number;
+    in_roh: boolean;
+  }>;
+  clinvar_summary?: Array<{
+    label: string;
+    count: number;
+  }>;
+  consequence_summary?: Array<{
+    label: string;
+    count: number;
+  }>;
+  clinical_coverage_summary?: Array<{
+    label: string;
+    count: number;
+    detail: string;
+  }>;
+  filtering_summary?: Array<{
+    label: string;
+    count: number;
+    detail: string;
+  }>;
+  symbolic_alt_summary?: {
+    count: number;
+    examples: Array<{
+      locus: string;
+      gene: string;
+      alts: string[];
+      consequence: string;
+      genotype: string;
+    }>;
+  };
   roh_segments?: Array<{
     sample: string;
     contig: string;
@@ -81,6 +114,15 @@ type AnalysisResponse = {
     source: string;
     url: string;
     note: string;
+  }>;
+  used_tools?: string[];
+  tool_registry?: Array<{
+    name: string;
+    description: string;
+    task: string;
+    modality: string;
+    approval_required: boolean;
+    source: string;
   }>;
 };
 
@@ -470,6 +512,7 @@ function hasMeaningfulText(value: string) {
 
 export default function Page() {
   const [apiBase, setApiBase] = useState("http://127.0.0.1:8001");
+  const [toolRegistry, setToolRegistry] = useState<AnalysisResponse["tool_registry"]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
@@ -493,10 +536,37 @@ export default function Page() {
   const [followUpAnswer, setFollowUpAnswer] = useState<string | null>(null);
   const [initialGroundedAnswer, setInitialGroundedAnswer] = useState<string | null>(null);
   const [activeStudioView, setActiveStudioView] = useState<StudioView | null>(null);
+  const [toolRegistryOpen, setToolRegistryOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const studioCanvasRef = useRef<HTMLElement | null>(null);
   const chatStreamRef = useRef<HTMLDivElement | null>(null);
   const initialSummaryRequestRef = useRef<string | null>(null);
+  const availableTools = analysis?.tool_registry?.length ? analysis.tool_registry : toolRegistry;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadToolRegistry() {
+      try {
+        const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/tools`);
+        if (!response.ok) {
+          return;
+        }
+        const payload = (await response.json()) as AnalysisResponse["tool_registry"];
+        if (!cancelled) {
+          setToolRegistry(payload);
+        }
+      } catch {
+        // Keep the shell usable even if the local backend is temporarily unavailable.
+      }
+    }
+
+    void loadToolRegistry();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase]);
 
   function addMessage(message: ChatMessage) {
     setMessages((current) => [...current, message]);
@@ -546,7 +616,7 @@ export default function Page() {
     setAnnotationSearch("");
     initialSummaryRequestRef.current = null;
     setOptionsAsked(true);
-    setPreAnalysisPrompt("Please input VCF analysis scope and its range..");
+    setPreAnalysisPrompt(null);
     setError(null);
     setStatus("File attached");
     void requestWorkflowStart(file.name);
@@ -671,20 +741,12 @@ export default function Page() {
         throw new Error(await response.text());
       }
       const payload = await response.json();
-      addMessage({
-        role: "assistant",
-        content: `${payload.assistant_message} (workflow model: ${payload.model})`,
-        kind: "status",
-      });
+      setPreAnalysisPrompt(payload.assistant_message);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
-      addMessage({
-        role: "assistant",
-        content:
-          `GPT workflow intake 호출에 실패했습니다: ${message}. ` +
-          "예: `all로 200개`, `representative로 진행`처럼 답해 주세요.",
-        kind: "status",
-      });
+      setPreAnalysisPrompt(
+        `Workflow intake 호출에 실패했습니다: ${message}. 예: \`all로 200개\`, \`representative로 진행\`처럼 답해 주세요.`,
+      );
     }
   }
 
@@ -870,6 +932,9 @@ export default function Page() {
     if (!analysis) {
       return [];
     }
+    if (analysis.clinvar_summary?.length) {
+      return analysis.clinvar_summary;
+    }
     const counts = new Map<string, number>();
     analysis.annotations.forEach((item) => {
       const key = summarizeLabel(item.clinical_significance, "Unreviewed");
@@ -882,6 +947,9 @@ export default function Page() {
   const consequenceCounts = useMemo(() => {
     if (!analysis) {
       return [];
+    }
+    if (analysis.consequence_summary?.length) {
+      return analysis.consequence_summary;
     }
     const counts = new Map<string, number>();
     analysis.annotations.forEach((item) => {
@@ -911,6 +979,13 @@ export default function Page() {
     if (!analysis) {
       return [];
     }
+    if (analysis.candidate_variants?.length) {
+      return analysis.candidate_variants.map((entry) => ({
+        item: entry.item,
+        score: entry.score,
+        inRoh: entry.in_roh,
+      }));
+    }
     return [...analysis.annotations]
       .map((item) => {
         const rohBoost = isVariantInRoh(item, analysis.roh_segments) ? 3 : 0;
@@ -927,6 +1002,9 @@ export default function Page() {
   const clinicalCoverage = useMemo(() => {
     if (!analysis || analysis.annotations.length === 0) {
       return [];
+    }
+    if (analysis.clinical_coverage_summary?.length) {
+      return analysis.clinical_coverage_summary;
     }
     const total = analysis.annotations.length;
     const ratio = (count: number) => `${Math.round((count / total) * 100)}%`;
@@ -947,9 +1025,40 @@ export default function Page() {
       { label: "Protein change", count: proteinCount, detail: `${proteinCount}/${total} annotated (${ratio(proteinCount)})` },
     ];
   }, [analysis]);
+  const filteringSummary = useMemo(() => {
+    if (!analysis) {
+      return [];
+    }
+    if (analysis.filtering_summary?.length) {
+      return analysis.filtering_summary;
+    }
+    const uniqueGenes = new Set(
+      analysis.annotations.map((item) => item.gene?.trim() || "").filter((item) => item && item !== "."),
+    );
+    const clinvarLabeled = analysis.annotations.filter(
+      (item) => item.clinical_significance && item.clinical_significance !== ".",
+    ).length;
+    const symbolicRows = analysis.annotations.filter((item) =>
+      item.alts.some((alt) => alt.startsWith("<") && alt.endsWith(">")),
+    ).length;
+    return [
+      { label: "Annotated rows", count: analysis.annotations.length, detail: `${analysis.annotations.length} rows currently available in the triage table` },
+      { label: "Distinct genes", count: uniqueGenes.size, detail: `${uniqueGenes.size} genes represented in the annotated subset` },
+      { label: "ClinVar-labeled rows", count: clinvarLabeled, detail: `${clinvarLabeled} rows contain a ClinVar-style significance label` },
+      { label: "Symbolic ALT rows", count: symbolicRows, detail: `${symbolicRows} rows are symbolic ALT records that may need separate handling` },
+    ];
+  }, [analysis]);
   const symbolicAnnotations = useMemo(() => {
     if (!analysis) {
       return [];
+    }
+    if (analysis.symbolic_alt_summary?.examples?.length) {
+      const lookup = new Map<string, VariantAnnotation>(
+        analysis.annotations.map((item) => [`${item.contig}:${item.pos_1based}`, item] as const),
+      );
+      return analysis.symbolic_alt_summary.examples
+        .map((item) => lookup.get(item.locus))
+        .filter((item): item is VariantAnnotation => Boolean(item));
     }
     return analysis.annotations.filter((item) => item.alts.some((alt) => alt.startsWith("<") && alt.endsWith(">")));
   }, [analysis]);
@@ -1045,6 +1154,7 @@ export default function Page() {
         het_hom_alt_ratio: qcMetrics?.het_hom_alt_ratio,
       },
       clinical_coverage: clinicalCoverage.slice(0, 5),
+      filtering_summary: filteringSummary.slice(0, 4),
       symbolic_alt_review: {
         count: symbolicAnnotations.length,
         examples: symbolicAnnotations.slice(0, 5).map((item) => ({
@@ -1107,6 +1217,7 @@ export default function Page() {
     analysis,
     candidateVariants,
     clinicalCoverage,
+    filteringSummary,
     clinvarCounts,
     consequenceCounts,
     qcMetrics,
@@ -1185,41 +1296,91 @@ export default function Page() {
             <h2>Sources</h2>
           </div>
           <div className="sourcePanelBody">
-            <button type="button" className="sourceAddButton" onClick={handleAttachClick}>
-              + Add VCF source
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".vcf,.gz,.vcf.gz"
-              onChange={handleFileChange}
-              className="hiddenInput"
-            />
-            <label className="field">
-              <span>API base URL</span>
-              <input value={apiBase} onChange={(event) => setApiBase(event.target.value)} />
-            </label>
-            <div className="sourceList">
-              {attachedFile ? (
-                <article className="sourceItem sourceItemActive">
-                  <div>
-                    <strong>{attachedFile.name}</strong>
-                    <p>Active VCF source</p>
-                  </div>
-                  <span className="sourceBadge">1</span>
-                </article>
-              ) : (
-                <div className="sourceEmpty">
-                  <p>Attach a VCF or VCF.gz file to start analysis.</p>
+            <div className="sourceSplitPanel">
+              <section className="sourceSplitSection">
+                <div className="sourceSectionHeader">
+                  <h3>Sources</h3>
                 </div>
-              )}
+                <div className="sourceSectionBody">
+                  <button type="button" className="sourceAddButton" onClick={handleAttachClick}>
+                    + Add VCF source
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".vcf,.gz,.vcf.gz"
+                    onChange={handleFileChange}
+                    className="hiddenInput"
+                  />
+                  <div className="sourceList">
+                    {attachedFile ? (
+                      <article className="sourceItem sourceItemActive">
+                        <div>
+                          <strong>{attachedFile.name}</strong>
+                          <p>Active VCF source</p>
+                        </div>
+                        <span className="sourceBadge">1</span>
+                      </article>
+                    ) : (
+                      <div className="sourceEmpty">
+                        <p>Attach a VCF or VCF.gz file to start analysis.</p>
+                      </div>
+                    )}
+                  </div>
+                  <div className="sourceMeta">
+                    <span>Status</span>
+                    <strong>{status}</strong>
+                  </div>
+                  {sourceStatusDetail ? <p className="sourceHint">{sourceStatusDetail}</p> : null}
+                  {error ? <p className="errorText">{error}</p> : null}
+                </div>
+              </section>
+
+              <section className="sourceSplitSection">
+                <div className="sourceSectionHeader">
+                  <h3>Tool Registry</h3>
+                </div>
+                <div className="sourceSectionBody">
+                  <div className="toolRegistryDetails">
+                    <button
+                      type="button"
+                      className="toolRegistrySummary"
+                      onClick={() => setToolRegistryOpen((current) => !current)}
+                    >
+                      Available tools
+                      <span className="toolRegistryCount">{availableTools?.length ?? 0}</span>
+                    </button>
+                    {toolRegistryOpen ? (
+                      <div className="toolRegistryMenu">
+                        {availableTools?.length ? (
+                          availableTools.map((tool) => (
+                            <div key={tool.name} className="toolRegistryItem" title={tool.description}>
+                              <span className="toolRegistryName">{tool.name}</span>
+                              <span className="toolRegistryTask">{tool.task}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="toolRegistryEmpty">Tool registry is currently unavailable from the local backend.</p>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="toolUsageLog">
+                    <span>Used tools</span>
+                    {analysis?.used_tools?.length ? (
+                      <ul className="toolUsageList">
+                        {analysis.used_tools.map((toolName, index) => (
+                          <li key={`${toolName}-${index}`}>{toolName}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="toolUsageEmpty">No tool has been logged for this run yet.</p>
+                    )}
+                  </div>
+                </div>
+              </section>
             </div>
-            <div className="sourceMeta">
-              <span>Status</span>
-              <strong>{status}</strong>
-            </div>
-            {sourceStatusDetail ? <p className="sourceHint">{sourceStatusDetail}</p> : null}
-            {error ? <p className="errorText">{error}</p> : null}
           </div>
         </aside>
 
@@ -1286,22 +1447,23 @@ export default function Page() {
             <h2>Studio</h2>
           </div>
           <div className="studioPanelBody">
-            <div className="studioGrid">
-              {studioCards.map((card) => (
-                <button
-                  type="button"
-                  key={card.id}
-                  className={`studioCard ${activeStudioView === card.id ? "studioCardActive" : ""}`}
-                  onClick={() => openStudioView(card.id)}
-                  disabled={!analysis}
-                >
-                  <strong>{card.title}</strong>
-                  <span>{card.subtitle}</span>
-                </button>
-              ))}
-            </div>
+            {analysis ? (
+              <div className="studioGrid">
+                {studioCards.map((card) => (
+                  <button
+                    type="button"
+                    key={card.id}
+                    className={`studioCard ${activeStudioView === card.id ? "studioCardActive" : ""}`}
+                    onClick={() => openStudioView(card.id)}
+                  >
+                    <strong>{card.title}</strong>
+                    <span>{card.subtitle}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <div className="studioHint">
-              {analysis ? "Choose a card to open a result view." : "Studio cards will activate after the analysis finishes."}
+              {analysis ? "Choose a card to open a result view." : "Studio cards will appear after tool-driven analysis results are ready."}
             </div>
           </div>
         </aside>
@@ -1503,6 +1665,14 @@ export default function Page() {
                 <span className="pill">{searchedAnnotations.length} rows</span>
               </div>
               <div className="studioCanvasBody">
+                <div className="resultList">
+                  {filteringSummary.map((item) => (
+                    <article key={item.label} className="resultListItem resultListStatic">
+                      <strong>{item.label}</strong>
+                      <span>{item.detail}</span>
+                    </article>
+                  ))}
+                </div>
                 <div className="oeAnnotationControls">
                   <label className="field">
                     <span>Search gene / consequence / ClinVar</span>

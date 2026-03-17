@@ -1,0 +1,8 @@
+{
+  "name": "annotation_tool",
+  "description": "Generates transcript-aware variant annotations for a VCF analysis run.",
+  "task": "annotation",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "plugin"
+}

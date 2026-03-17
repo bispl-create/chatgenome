@@ -1,0 +1,8 @@
+{
+  "name": "roh_analysis_tool",
+  "description": "Run bcftools roh-based runs-of-homozygosity analysis and return ROH segments.",
+  "task": "roh-analysis",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "internal"
+}

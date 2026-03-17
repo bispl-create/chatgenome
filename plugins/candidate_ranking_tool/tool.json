@@ -1,0 +1,8 @@
+{
+  "name": "candidate_ranking_tool",
+  "description": "Ranks annotated variants into a short candidate review list using clinical and ROH-aware heuristics.",
+  "task": "candidate-ranking",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "plugin"
+}

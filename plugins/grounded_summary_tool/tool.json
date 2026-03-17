@@ -1,0 +1,8 @@
+{
+  "name": "grounded_summary_tool",
+  "description": "Builds the grounded narrative summary from tool-derived genomics analysis state.",
+  "task": "grounded-summary",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "plugin"
+}
