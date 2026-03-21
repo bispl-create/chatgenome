@@ -1,0 +1,16 @@
+{
+  "name": "snpeff_execution_tool",
+  "description": "Run local SnpEff annotation on a VCF using the installed Java runtime and local SnpEff genome databases.",
+  "task": "variant-annotation-execution",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "local",
+  "routing": {
+    "trigger_keywords": ["snpeff", "snp eff"],
+    "execution_intents": ["run", "execute", "annotate", "use", "실행", "돌려", "주석", "사용"],
+    "requires_source_vcf": true,
+    "question_argument": "none",
+    "result_slot": "snpeff_result",
+    "execution_mode": "direct_endpoint"
+  }
+}

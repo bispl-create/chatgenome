@@ -1,0 +1,16 @@
+{
+  "name": "ldblockshow_execution_tool",
+  "description": "Run local LDBlockShow on a VCF locus and generate LD heatmap artifacts such as SVG and block tables.",
+  "task": "ld-heatmap-visualization",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "local",
+  "routing": {
+    "trigger_keywords": ["ldblockshow", "ld block", "ld heatmap", "ld block review"],
+    "execution_intents": ["run", "execute", "plot", "generate", "draw", "실행", "돌려", "그려", "생성"],
+    "requires_source_vcf": true,
+    "question_argument": "region",
+    "result_slot": "ldblockshow_result",
+    "execution_mode": "direct_endpoint"
+  }
+}

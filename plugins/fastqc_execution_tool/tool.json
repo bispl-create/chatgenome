@@ -1,0 +1,8 @@
+{
+  "name": "fastqc_execution_tool",
+  "description": "Run local FastQC on FASTQ, SAM, or BAM inputs and return deterministic raw sequencing QC summaries.",
+  "task": "raw-sequencing-qc",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "local"
+}

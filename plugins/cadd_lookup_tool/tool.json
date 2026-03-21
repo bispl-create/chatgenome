@@ -1,0 +1,8 @@
+{
+  "name": "cadd_lookup_tool",
+  "description": "Enrich shortlisted annotated variants with local CADD lookup scores when a build-matched local table is available.",
+  "task": "variant-score-lookup",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "local"
+}

@@ -42,10 +42,16 @@ type VariantAnnotation = {
   clinvar_conditions: string;
   gnomad_af: string;
   source_url: string;
+  cadd_raw_score?: number | null;
+  cadd_phred?: number | null;
+  cadd_lookup_status?: string | null;
+  revel_score?: number | null;
+  revel_lookup_status?: string | null;
 };
 
 type AnalysisResponse = {
   analysis_id: string;
+  source_vcf_path?: string | null;
   draft_answer: string;
   facts: {
     file_name: string;
@@ -66,6 +72,71 @@ type AnalysisResponse = {
     };
   };
   annotations: VariantAnnotation[];
+  snpeff_result?: {
+    tool: string;
+    genome: string;
+    input_path: string;
+    output_path: string;
+    index_path?: string | null;
+    command_preview: string;
+    parsed_records: Array<{
+      contig: string;
+      pos_1based: number;
+      ref: string;
+      alt: string;
+      ann: Array<{
+        allele: string;
+        annotation: string;
+        impact: string;
+        gene_name: string;
+        gene_id: string;
+        feature_type: string;
+        feature_id: string;
+        transcript_biotype: string;
+        rank: string;
+        hgvs_c: string;
+        hgvs_p: string;
+      }>;
+    }>;
+  } | null;
+  opencravat_result?: {
+    tool: string;
+    genome: string;
+    input_path: string;
+    output_dir: string;
+    run_name: string;
+    command_preview: string;
+    status?: string | null;
+    error_message?: string | null;
+    status_json_path?: string | null;
+    sqlite_path?: string | null;
+    text_report_path?: string | null;
+    variant_table_path?: string | null;
+    excel_report_path?: string | null;
+    vcf_report_path?: string | null;
+    csv_report_path?: string | null;
+    preview_rows: Array<{
+      columns: Record<string, string>;
+    }>;
+  } | null;
+  ldblockshow_result?: {
+    tool: string;
+    input_path: string;
+    region: string;
+    output_prefix: string;
+    command_preview: string;
+    svg_path?: string | null;
+    png_path?: string | null;
+    pdf_path?: string | null;
+    block_path?: string | null;
+    site_path?: string | null;
+    triangle_path?: string | null;
+    attempted_regions?: string[];
+    site_row_count?: number;
+    block_row_count?: number;
+    triangle_pair_count?: number;
+    warnings: string[];
+  } | null;
   candidate_variants?: Array<{
     item: VariantAnnotation;
     score: number;
@@ -126,6 +197,37 @@ type AnalysisResponse = {
   }>;
 };
 
+type RawQcResponse = {
+  analysis_id: string;
+  draft_answer: string;
+  facts: {
+    file_name: string;
+    file_kind: string;
+    total_sequences: number | null;
+    filtered_sequences: number | null;
+    poor_quality_sequences: number | null;
+    sequence_length: string | null;
+    gc_content: number | null;
+    encoding: string | null;
+  };
+  modules: Array<{
+    name: string;
+    status: string;
+    detail: string;
+  }>;
+  report_html_path?: string | null;
+  report_zip_path?: string | null;
+  used_tools?: string[];
+  tool_registry?: Array<{
+    name: string;
+    description: string;
+    task: string;
+    modality: string;
+    approval_required: boolean;
+    source: string;
+  }>;
+};
+
 type ChatMessage = {
   role: "assistant" | "user";
   content: string;
@@ -142,6 +244,10 @@ type StudioView =
   | "acmg"
   | "provenance"
   | "coverage"
+  | "rawqc"
+  | "snpeff"
+  | "opencravat"
+  | "ldblockshow"
   | "symbolic"
   | "roh"
   | "qc"
@@ -162,6 +268,25 @@ type RohStudioSegment = {
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function isRawQcFileName(fileName: string) {
+  const lowered = fileName.toLowerCase();
+  return (
+    lowered.endsWith(".fastq") ||
+    lowered.endsWith(".fastq.gz") ||
+    lowered.endsWith(".fq") ||
+    lowered.endsWith(".fq.gz") ||
+    lowered.endsWith(".bam") ||
+    lowered.endsWith(".sam")
+  );
+}
+
+function isExplicitOpenCravatRequest(text: string) {
+  const lowered = text.toLowerCase();
+  const mentions = lowered.includes("opencravat") || lowered.includes("open cravat");
+  const execution = ["run", "execute", "실행", "돌려", "annotate"].some((marker) => lowered.includes(marker));
+  return mentions && execution;
 }
 
 function formatPercent(value: number | null | undefined) {
@@ -198,6 +323,13 @@ function AnnotationDetailCard({ item }: { item: VariantAnnotation }) {
       <p>
         Genotype: {item.genotype} | ClinVar: {item.clinical_significance} | gnomAD AF: {item.gnomad_af}
       </p>
+      {item.cadd_phred != null || item.cadd_raw_score != null ? (
+        <p>
+          CADD: PHRED {item.cadd_phred != null ? item.cadd_phred.toFixed(1) : "n/a"} | Raw{" "}
+          {item.cadd_raw_score != null ? item.cadd_raw_score.toFixed(3) : "n/a"}
+        </p>
+      ) : null}
+      {item.revel_score != null ? <p>REVEL: {item.revel_score.toFixed(3)}</p> : null}
       <p>Condition: {item.clinvar_conditions}</p>
       {item.transcript_options.length ? (
         <label className="field compactField">
@@ -513,18 +645,20 @@ function hasMeaningfulText(value: string) {
 export default function Page() {
   const [apiBase, setApiBase] = useState("http://127.0.0.1:8001");
   const [toolRegistry, setToolRegistry] = useState<AnalysisResponse["tool_registry"]>([]);
+  const [toolRegistryLoading, setToolRegistryLoading] = useState(true);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
       content:
-        "VCF 파일을 + 버튼으로 첨부하면 제가 annotation scope와 range(limit)를 확인한 뒤 분석을 진행합니다. 별도 지시가 없으면 representative로 시작합니다.",
+        "VCF를 올리면 variant interpretation workflow를 진행하고, FASTQ/BAM/SAM을 올리면 FastQC 기반 raw sequencing QC를 진행합니다.",
     },
   ]);
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
+  const [rawQcAnalysis, setRawQcAnalysis] = useState<RawQcResponse | null>(null);
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
   const [annotationScope, setAnnotationScope] = useState<"representative" | "all">("representative");
   const [annotationLimit, setAnnotationLimit] = useState("200");
-  const [status, setStatus] = useState("Waiting for a VCF");
+  const [status, setStatus] = useState("Waiting for a genomics source");
   const [error, setError] = useState<string | null>(null);
   const [selectedAnnotationIndex, setSelectedAnnotationIndex] = useState(0);
   const [annotationSearch, setAnnotationSearch] = useState("");
@@ -541,12 +675,20 @@ export default function Page() {
   const studioCanvasRef = useRef<HTMLElement | null>(null);
   const chatStreamRef = useRef<HTMLDivElement | null>(null);
   const initialSummaryRequestRef = useRef<string | null>(null);
-  const availableTools = analysis?.tool_registry?.length ? analysis.tool_registry : toolRegistry;
+  const activeToolRegistry =
+    analysis?.tool_registry?.length
+      ? analysis.tool_registry
+      : rawQcAnalysis?.tool_registry?.length
+        ? rawQcAnalysis.tool_registry
+        : toolRegistry;
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadToolRegistry() {
+      if (!cancelled) {
+        setToolRegistryLoading(true);
+      }
       try {
         const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/tools`);
         if (!response.ok) {
@@ -558,15 +700,25 @@ export default function Page() {
         }
       } catch {
         // Keep the shell usable even if the local backend is temporarily unavailable.
+      } finally {
+        if (!cancelled) {
+          setToolRegistryLoading(false);
+        }
       }
     }
 
     void loadToolRegistry();
+    const retryTimer = window.setInterval(() => {
+      if (!cancelled && (toolRegistry?.length ?? 0) === 0) {
+        void loadToolRegistry();
+      }
+    }, 4000);
 
     return () => {
       cancelled = true;
+      window.clearInterval(retryTimer);
     };
-  }, [apiBase]);
+  }, [apiBase, toolRegistry?.length]);
 
   function addMessage(message: ChatMessage) {
     setMessages((current) => [...current, message]);
@@ -608,6 +760,7 @@ export default function Page() {
     }
     setAttachedFile(file);
     setAnalysis(null);
+    setRawQcAnalysis(null);
     setFollowUpAnswer(null);
     setInitialGroundedAnswer(null);
     setAnalysisQa([]);
@@ -618,9 +771,52 @@ export default function Page() {
     setOptionsAsked(true);
     setPreAnalysisPrompt(null);
     setError(null);
-    setStatus("File attached");
-    void requestWorkflowStart(file.name);
+    if (isRawQcFileName(file.name)) {
+      setOptionsAsked(false);
+      setStatus("Running FastQC...");
+      void handleStartRawQc(file);
+    } else {
+      setStatus("File attached");
+      void requestWorkflowStart(file.name);
+    }
     event.target.value = "";
+  }
+
+  async function handleStartRawQc(file: File) {
+    setError(null);
+    addMessage({
+      role: "assistant",
+      content: "FastQC로 raw sequencing QC를 실행하고 있습니다.",
+      kind: "status",
+    });
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/raw-qc/upload`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      const payload: RawQcResponse = await response.json();
+      setRawQcAnalysis(payload);
+      setAnalysis(null);
+      setActiveStudioView("rawqc");
+      setStatus("Raw QC ready");
+      setComposerText("");
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setError(message);
+      setStatus("Raw QC failed");
+      addMessage({
+        role: "assistant",
+        content: `FastQC 실행 중 오류가 발생했습니다: ${message}`,
+      });
+    }
   }
 
   async function handleStartAnalysis(parsedScope?: "representative" | "all", parsedLimit?: string) {
@@ -635,6 +831,20 @@ export default function Page() {
     setAnnotationLimit(effectiveLimit);
     setError(null);
     setStatus("Analyzing");
+    if ((toolRegistry?.length ?? 0) === 0) {
+      void (async () => {
+        try {
+          const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/tools`);
+          if (!response.ok) {
+            return;
+          }
+          const payload = (await response.json()) as AnalysisResponse["tool_registry"];
+          setToolRegistry(payload);
+        } catch {
+          // best-effort refresh only
+        }
+      })();
+    }
     addMessage({
       role: "assistant",
       content: "pysam으로 VCF header, sample, record count, 기본 QC를 읽고 있습니다.",
@@ -722,10 +932,16 @@ export default function Page() {
       return;
     }
 
+    if (rawQcAnalysis) {
+      setComposerText("");
+      await handleAskRawQcQuestion(text);
+      return;
+    }
+
     addMessage({ role: "user", content: text });
     addMessage({
       role: "assistant",
-      content: "먼저 VCF를 첨부하거나 업로드 후 옵션을 답해 주세요.",
+      content: "먼저 VCF 또는 raw sequencing file을 첨부해 주세요.",
     });
     setComposerText("");
   }
@@ -794,6 +1010,61 @@ export default function Page() {
       return;
     }
 
+    if (isExplicitOpenCravatRequest(text)) {
+      setStatus("Running OpenCRAVAT...");
+      setAnalysisQa((current) => [...current, { role: "user", content: text }]);
+      try {
+        const genomeGuess = (analysis.facts.genome_build_guess || "").toLowerCase();
+        const genome =
+          genomeGuess.includes("38") || genomeGuess.includes("hg38") || genomeGuess.includes("grch38")
+            ? "hg38"
+            : "hg19";
+        const runName = `${analysis.analysis_id}-opencravat-${Date.now()}`;
+        const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/opencravat/run`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            vcf_path: analysis.source_vcf_path,
+            genome,
+            run_name: runName,
+            report_types: ["text"],
+            preview_limit: 5,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        const result = await response.json();
+        const answer =
+          `OpenCRAVAT was run on the current VCF using genome \`${result.genome}\`.\n\n` +
+          `- Status: \`${result.status || "unknown"}\`\n` +
+          `- Primary artifact: \`${result.text_report_path || result.variant_table_path || result.sqlite_path || "not available"}\`\n` +
+          `- Preview rows: ${Array.isArray(result.preview_rows) ? result.preview_rows.length : 0}\n\n` +
+          "The Studio card has been updated with the latest OpenCRAVAT result.";
+        setAnalysisQa((current) => [...current, { role: "assistant", content: answer }]);
+        setAnalysis((current) =>
+          current
+            ? {
+                ...current,
+                opencravat_result: result,
+                used_tools: ["opencravat_execution_tool"],
+              }
+            : current,
+        );
+        setActiveStudioView("opencravat");
+        setFollowUpAnswer(answer);
+        setStatus("Answer ready");
+      } catch (caught) {
+        const msg = caught instanceof Error ? caught.message : String(caught);
+        setAnalysisQa((current) => [
+          ...current,
+          { role: "assistant", content: `OpenCRAVAT 실행 중 오류가 발생했습니다: ${msg}` },
+        ]);
+        setStatus("Answer failed");
+      }
+      return;
+    }
+
     setStatus("Generating answer...");
     setAnalysisQa((current) => [...current, { role: "user", content: text }]);
 
@@ -806,6 +1077,66 @@ export default function Page() {
           analysis,
           history: analysisQa.map((turn) => ({ role: turn.role, content: turn.content })),
           studio_context: studioContext,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = await response.json();
+      setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
+      if (payload.ldblockshow_result) {
+        setAnalysis((current) =>
+          current
+            ? {
+                ...current,
+                ldblockshow_result: payload.ldblockshow_result,
+                used_tools: payload.used_tools ?? ["ldblockshow_execution_tool"],
+              }
+            : current,
+        );
+        setActiveStudioView("ldblockshow");
+      }
+      if (payload.opencravat_result) {
+        setAnalysis((current) =>
+          current
+            ? {
+                ...current,
+                opencravat_result: payload.opencravat_result,
+                used_tools: payload.used_tools ?? ["opencravat_execution_tool"],
+              }
+            : current,
+        );
+        setActiveStudioView("opencravat");
+      }
+      setFollowUpAnswer(payload.answer);
+      setStatus("Answer ready");
+    } catch (caught) {
+      const msg = caught instanceof Error ? caught.message : String(caught);
+      setAnalysisQa((current) => [
+        ...current,
+        { role: "assistant", content: `설명 요청 중 오류가 발생했습니다: ${msg}` },
+      ]);
+      setStatus("Answer failed");
+    }
+  }
+
+  async function handleAskRawQcQuestion(questionText?: string) {
+    const text = questionText?.trim() ?? "";
+    if (!text || !rawQcAnalysis) {
+      return;
+    }
+
+    setStatus("Generating answer...");
+    setAnalysisQa((current) => [...current, { role: "user", content: text }]);
+
+    try {
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/chat/raw-qc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: text,
+          analysis: rawQcAnalysis,
+          history: analysisQa.map((turn) => ({ role: turn.role, content: turn.content })),
         }),
       });
       if (!response.ok) {
@@ -848,7 +1179,9 @@ export default function Page() {
   const selectedAnnotation = searchedAnnotations[safeSelectedIndex] ?? searchedAnnotations[0] ?? null;
   const summaryText = analysis
     ? formatSummaryWithCitations(initialGroundedAnswer ?? analysis.draft_answer, analysis.references)
-    : null;
+    : rawQcAnalysis
+      ? rawQcAnalysis.draft_answer
+      : null;
   const displayedAnswer = followUpAnswer ?? summaryText;
   const hasInteractiveState = Boolean(attachedFile || analysis || messages.length > 1);
   const latestStatusMessage =
@@ -872,6 +1205,9 @@ export default function Page() {
     if (status === "Analyzing") {
       return "Reading the VCF, attaching deterministic annotation, and preparing grounded outputs.";
     }
+    if (status === "Running FastQC...") {
+      return "Running local FastQC on the uploaded raw sequencing file and collecting module-level QC results.";
+    }
     if (status === "File attached") {
       return "The VCF is attached. Reply in chat with the analysis scope and range.";
     }
@@ -884,6 +1220,12 @@ export default function Page() {
     if (status === "Grounded summary ready") {
       return "The initial grounded summary is ready. You can continue asking questions about any Studio result.";
     }
+    if (status === "Raw QC ready") {
+      return "FastQC finished. You can inspect the module summary in Studio and ask follow-up questions in chat.";
+    }
+    if (status === "Raw QC failed") {
+      return "FastQC failed for the uploaded raw sequencing file. Check the error and runtime prerequisites such as Java.";
+    }
     if (status === "Answer failed") {
       return "The last chat response failed. Retry the question and ChatGenome will attempt the grounded explanation again.";
     }
@@ -895,13 +1237,17 @@ export default function Page() {
     status === "Preparing analysis..." ||
     status === "Preparing grounded summary..." ||
     status === "Analyzing" ||
+    status === "Running FastQC..." ||
     status === "File attached" ||
     status === "Scope received" ||
     status === "Awaiting scope and range" ||
+    status === "Raw QC failed" ||
     status === "Answer failed"
       ? status
-      : analysis
-        ? "Analysis ready"
+      : analysis || rawQcAnalysis
+        ? analysis
+          ? "Analysis ready"
+          : "Raw QC ready"
         : status;
   const chatTurns = [
     ...(preAnalysisPrompt
@@ -915,7 +1261,7 @@ export default function Page() {
     ...messages
       .filter((message) => message.role === "user")
       .map((message) => ({ role: message.role, content: message.content })),
-    ...(analysis
+    ...(analysis || rawQcAnalysis
       ? [
           {
             role: "assistant" as const,
@@ -1126,21 +1472,28 @@ export default function Page() {
       .sort((left, right) => right.score - left.score)
       .slice(0, 8);
   }, [analysis]);
-  const studioCards: Array<{ id: StudioView; title: string; subtitle: string }> = [
-    { id: "provenance", title: "Workflow Setup", subtitle: "Tools, scope, and run policy" },
-    { id: "qc", title: "QC Summary", subtitle: "PASS, Ti/Tv, GT quality" },
-    { id: "coverage", title: "Clinical Coverage", subtitle: "Annotation completeness view" },
-    { id: "table", title: "Filtering View", subtitle: "Searchable variant triage" },
-    { id: "symbolic", title: "Symbolic ALT Review", subtitle: "Structural-style records split out" },
-    { id: "roh", title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" },
-    { id: "candidates", title: "Candidate Variants", subtitle: "Ranked review shortlist" },
-    { id: "vep", title: "VEP Consequence", subtitle: "Consequence and gene burden" },
-    { id: "clinvar", title: "ClinVar Review", subtitle: "Clinical significance mix" },
-    { id: "annotations", title: "Annotation Cards", subtitle: "Variant detail cards" },
-    { id: "igv", title: "IGV Plot", subtitle: "Locus visualization" },
-    { id: "acmg", title: "ACMG Review", subtitle: "Evidence hints, not final calls" },
-    { id: "references", title: "References", subtitle: "Linked evidence" },
-  ];
+  const studioCards: Array<{ id: StudioView; title: string; subtitle: string }> = rawQcAnalysis
+    ? [{ id: "rawqc", title: "FastQC Review", subtitle: "Raw sequencing module summary" }]
+    : [
+        { id: "provenance", title: "Workflow Setup", subtitle: "Tools, scope, and run policy" },
+        { id: "qc", title: "QC Summary", subtitle: "PASS, Ti/Tv, GT quality" },
+        { id: "coverage", title: "Clinical Coverage", subtitle: "Annotation completeness view" },
+        { id: "snpeff", title: "SnpEff Review", subtitle: "Local effect annotation preview" },
+        { id: "opencravat", title: "OpenCRAVAT Review", subtitle: "Local composite annotation preview" },
+        ...(analysis?.ldblockshow_result
+          ? [{ id: "ldblockshow" as StudioView, title: "LD Block Review", subtitle: "Locus-level LD heatmap" }]
+          : []),
+        { id: "table", title: "Filtering View", subtitle: "Searchable variant triage" },
+        { id: "symbolic", title: "Symbolic ALT Review", subtitle: "Structural-style records split out" },
+        { id: "roh", title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" },
+        { id: "candidates", title: "Candidate Variants", subtitle: "Ranked review shortlist" },
+        { id: "vep", title: "VEP Consequence", subtitle: "Consequence and gene burden" },
+        { id: "clinvar", title: "ClinVar Review", subtitle: "Clinical significance mix" },
+        { id: "annotations", title: "Annotation Cards", subtitle: "Variant detail cards" },
+        { id: "igv", title: "IGV Plot", subtitle: "Locus visualization" },
+        { id: "acmg", title: "ACMG Review", subtitle: "Evidence hints, not final calls" },
+        { id: "references", title: "References", subtitle: "Linked evidence" },
+      ];
   const studioContext = useMemo(() => {
     if (!analysis) {
       return {};
@@ -1199,6 +1552,38 @@ export default function Page() {
       })),
       clinvar_review: clinvarCounts.slice(0, 8),
       vep_consequence: consequenceCounts.slice(0, 10),
+      snpeff_preview: analysis?.snpeff_result
+        ? {
+            genome: analysis.snpeff_result.genome,
+            parsed_records: analysis.snpeff_result.parsed_records.slice(0, 5).map((record) => ({
+              locus: `${record.contig}:${record.pos_1based}`,
+              ref: record.ref,
+              alt: record.alt,
+              ann: record.ann.slice(0, 2).map((ann) => ({
+                annotation: ann.annotation,
+                impact: ann.impact,
+                gene_name: ann.gene_name,
+                hgvs_c: ann.hgvs_c,
+                hgvs_p: ann.hgvs_p,
+              })),
+            })),
+          }
+        : null,
+      opencravat_preview: analysis?.opencravat_result
+        ? {
+            genome: analysis.opencravat_result.genome,
+            status: analysis.opencravat_result.status,
+            error_message: analysis.opencravat_result.error_message,
+            preview_rows: analysis.opencravat_result.preview_rows.slice(0, 5).map((row) => row.columns),
+          }
+        : null,
+      ldblockshow_preview: analysis?.ldblockshow_result
+        ? {
+            region: analysis.ldblockshow_result.region,
+            svg_path: analysis.ldblockshow_result.svg_path,
+            warnings: analysis.ldblockshow_result.warnings.slice(0, 6),
+          }
+        : null,
       selected_annotation: selectedAnnotation
         ? {
             locus: `${selectedAnnotation.contig}:${selectedAnnotation.pos_1based}`,
@@ -1303,12 +1688,12 @@ export default function Page() {
                 </div>
                 <div className="sourceSectionBody">
                   <button type="button" className="sourceAddButton" onClick={handleAttachClick}>
-                    + Add VCF source
+                    + Add genomics source
                   </button>
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".vcf,.gz,.vcf.gz"
+                    accept=".vcf,.vcf.gz,.gz,.fastq,.fastq.gz,.fq,.fq.gz,.bam,.sam"
                     onChange={handleFileChange}
                     className="hiddenInput"
                   />
@@ -1317,13 +1702,13 @@ export default function Page() {
                       <article className="sourceItem sourceItemActive">
                         <div>
                           <strong>{attachedFile.name}</strong>
-                          <p>Active VCF source</p>
+                          <p>{isRawQcFileName(attachedFile.name) ? "Active raw sequencing source" : "Active VCF source"}</p>
                         </div>
                         <span className="sourceBadge">1</span>
                       </article>
                     ) : (
                       <div className="sourceEmpty">
-                        <p>Attach a VCF or VCF.gz file to start analysis.</p>
+                        <p>Attach a VCF or a raw sequencing file such as FASTQ/BAM/SAM to start analysis.</p>
                       </div>
                     )}
                   </div>
@@ -1348,17 +1733,25 @@ export default function Page() {
                       onClick={() => setToolRegistryOpen((current) => !current)}
                     >
                       Available tools
-                      <span className="toolRegistryCount">{availableTools?.length ?? 0}</span>
+                      <span className="toolRegistryCount">
+                        {activeToolRegistry?.length
+                          ? activeToolRegistry.length
+                          : toolRegistryLoading
+                            ? "…"
+                            : 0}
+                      </span>
                     </button>
                     {toolRegistryOpen ? (
                       <div className="toolRegistryMenu">
-                        {availableTools?.length ? (
-                          availableTools.map((tool) => (
+                        {activeToolRegistry?.length ? (
+                          activeToolRegistry.map((tool) => (
                             <div key={tool.name} className="toolRegistryItem" title={tool.description}>
                               <span className="toolRegistryName">{tool.name}</span>
                               <span className="toolRegistryTask">{tool.task}</span>
                             </div>
                           ))
+                        ) : toolRegistryLoading ? (
+                          <p className="toolRegistryEmpty">Loading tool registry from the local backend...</p>
                         ) : (
                           <p className="toolRegistryEmpty">Tool registry is currently unavailable from the local backend.</p>
                         )}
@@ -1368,9 +1761,9 @@ export default function Page() {
 
                   <div className="toolUsageLog">
                     <span>Used tools</span>
-                    {analysis?.used_tools?.length ? (
+                    {(analysis?.used_tools?.length || rawQcAnalysis?.used_tools?.length) ? (
                       <ul className="toolUsageList">
-                        {analysis.used_tools.map((toolName, index) => (
+                        {(analysis?.used_tools ?? rawQcAnalysis?.used_tools ?? []).map((toolName, index) => (
                           <li key={`${toolName}-${index}`}>{toolName}</li>
                         ))}
                       </ul>
@@ -1406,8 +1799,8 @@ export default function Page() {
                 ))
               ) : (
                 <div className="chatEmptyState">
-                  <h3>Start with one VCF</h3>
-                  <p>Upload a VCF on the left, then continue the workflow in this chat.</p>
+                  <h3>Start with one genomics source</h3>
+                  <p>Upload a VCF or a raw sequencing file on the left, then continue the workflow in this chat.</p>
                 </div>
               )}
             </div>
@@ -1423,7 +1816,7 @@ export default function Page() {
                     ? optionsAsked
                       ? "예: all로 200개, 비워두면 representative"
                       : "Start typing a follow-up question..."
-                    : "Upload a VCF first"
+                    : "Upload a VCF or raw sequencing file first"
                 }
                 onKeyDown={(event) => {
                   if (isComposing || event.nativeEvent.isComposing) {
@@ -1447,7 +1840,7 @@ export default function Page() {
             <h2>Studio</h2>
           </div>
           <div className="studioPanelBody">
-            {analysis ? (
+            {analysis || rawQcAnalysis ? (
               <div className="studioGrid">
                 {studioCards.map((card) => (
                   <button
@@ -1463,15 +1856,69 @@ export default function Page() {
               </div>
             ) : null}
             <div className="studioHint">
-              {analysis ? "Choose a card to open a result view." : "Studio cards will appear after tool-driven analysis results are ready."}
+              {analysis || rawQcAnalysis ? "Choose a card to open a result view." : "Studio cards will appear after tool-driven analysis results are ready."}
             </div>
           </div>
         </aside>
       </div>
 
-      {analysis && activeStudioView ? (
+      {(analysis || rawQcAnalysis) && activeStudioView ? (
         <section ref={studioCanvasRef} className="studioCanvas">
-          {activeStudioView === "candidates" ? (
+          {rawQcAnalysis && activeStudioView === "rawqc" ? (
+            <section className="notebookPanel studioCanvasPanel">
+              <div className="notebookHeader">
+                <h2>FastQC Review</h2>
+              </div>
+              <div className="studioCanvasBody">
+                <div className="resultMetricGrid">
+                  <MetricTile
+                    label="Total sequences"
+                    value={rawQcAnalysis.facts.total_sequences != null ? String(rawQcAnalysis.facts.total_sequences) : "n/a"}
+                    tone="good"
+                  />
+                  <MetricTile label="Sequence length" value={rawQcAnalysis.facts.sequence_length ?? "n/a"} tone="neutral" />
+                  <MetricTile
+                    label="%GC"
+                    value={rawQcAnalysis.facts.gc_content != null ? `${rawQcAnalysis.facts.gc_content.toFixed(1)}%` : "n/a"}
+                    tone="neutral"
+                  />
+                  <MetricTile label="Encoding" value={rawQcAnalysis.facts.encoding ?? "n/a"} tone="neutral" />
+                </div>
+                <div className="resultList">
+                  {rawQcAnalysis.modules.map((module) => (
+                    <article key={module.name} className="miniCard">
+                      <h3>{module.name}</h3>
+                      <p>Status: {module.status}</p>
+                      {module.detail ? <p>{module.detail}</p> : null}
+                    </article>
+                  ))}
+                </div>
+                <div className="resultActionRow">
+                  {rawQcAnalysis.report_html_path ? (
+                    <a
+                      className="sourceAddButton"
+                      href={`${apiBase.replace(/\/$/, "")}/api/v1/raw-qc/report?path=${encodeURIComponent(rawQcAnalysis.report_html_path)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open HTML report
+                    </a>
+                  ) : null}
+                  {rawQcAnalysis.report_zip_path ? (
+                    <a
+                      className="sourceAddButton"
+                      href={`${apiBase.replace(/\/$/, "")}/api/v1/raw-qc/report?path=${encodeURIComponent(rawQcAnalysis.report_zip_path)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Download ZIP
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+            </section>
+          ) : null}
+          {analysis && activeStudioView === "candidates" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>Candidate Variants</h2>
@@ -1501,6 +1948,8 @@ export default function Page() {
                         Score {score} | {summarizeLabel(item.consequence, "Unclassified")} |{" "}
                         {summarizeLabel(item.clinical_significance, "Unreviewed")}
                         {inRoh ? " | inside ROH" : ""}
+                        {item.cadd_phred != null ? ` | CADD ${item.cadd_phred.toFixed(1)}` : ""}
+                        {item.revel_score != null ? ` | REVEL ${item.revel_score.toFixed(3)}` : ""}
                         {" | "}gnomAD {item.gnomad_af || "n/a"}
                       </span>
                     </button>
@@ -1510,7 +1959,7 @@ export default function Page() {
             </section>
           ) : null}
 
-          {activeStudioView === "acmg" ? (
+          {analysis && activeStudioView === "acmg" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>ACMG Review</h2>
@@ -1544,7 +1993,7 @@ export default function Page() {
             </section>
           ) : null}
 
-          {activeStudioView === "provenance" ? (
+          {analysis && activeStudioView === "provenance" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>Analysis Provenance</h2>
@@ -1580,7 +2029,7 @@ export default function Page() {
             </section>
           ) : null}
 
-          {activeStudioView === "qc" ? (
+          {analysis && activeStudioView === "qc" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>QC Summary</h2>
@@ -1640,7 +2089,7 @@ export default function Page() {
             </section>
           ) : null}
 
-          {activeStudioView === "coverage" ? (
+          {analysis && activeStudioView === "coverage" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>Clinical Annotation Coverage</h2>
@@ -1658,7 +2107,229 @@ export default function Page() {
             </section>
           ) : null}
 
-          {activeStudioView === "table" ? (
+          {analysis && activeStudioView === "snpeff" ? (
+            <section className="notebookPanel studioCanvasPanel">
+              <div className="notebookHeader">
+                <h2>SnpEff Review</h2>
+              </div>
+              <div className="studioCanvasBody">
+                {analysis.snpeff_result ? (
+                  <>
+                    <div className="resultMetricGrid">
+                      <MetricTile label="Genome DB" value={analysis.snpeff_result.genome} tone="good" />
+                      <MetricTile label="Preview rows" value={String(analysis.snpeff_result.parsed_records.length)} tone="neutral" />
+                      <MetricTile label="Tool" value={analysis.snpeff_result.tool} tone="neutral" />
+                    </div>
+                    <div className="resultList">
+                      {analysis.snpeff_result.parsed_records.map((record, index) => (
+                        <article key={`${record.contig}-${record.pos_1based}-${record.alt}-${index}`} className="resultListItem resultListStatic">
+                          <strong>
+                            {record.contig}:{record.pos_1based} {record.ref}&gt;{record.alt}
+                          </strong>
+                          <span>
+                            {record.ann.length
+                              ? record.ann
+                                  .slice(0, 2)
+                                  .map((ann) => `${ann.gene_name || "Unknown"} | ${ann.annotation} | ${ann.impact} | ${ann.hgvs_c || "."} | ${ann.hgvs_p || "."}`)
+                                  .join(" || ")
+                              : "No parsed ANN entries"}
+                          </span>
+                        </article>
+                      ))}
+                    </div>
+                    <div className="resultActionRow">
+                      <a
+                        className="sourceAddButton"
+                        href={`file://${analysis.snpeff_result.output_path}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open annotated VCF
+                      </a>
+                    </div>
+                  </>
+                ) : (
+                  <p className="emptyState">No auxiliary SnpEff result is available for the current analysis.</p>
+                )}
+              </div>
+            </section>
+          ) : null}
+
+          {analysis && activeStudioView === "opencravat" ? (
+            <section className="notebookPanel studioCanvasPanel">
+              <div className="notebookHeader">
+                <h2>OpenCRAVAT Review</h2>
+              </div>
+              <div className="studioCanvasBody">
+                {analysis.opencravat_result ? (
+                  <>
+                    <div className="resultMetricGrid">
+                      <MetricTile label="Genome" value={analysis.opencravat_result.genome} tone="good" />
+                      <MetricTile label="Status" value={analysis.opencravat_result.status ?? "unknown"} tone="neutral" />
+                      <MetricTile
+                        label="Preview rows"
+                        value={String(analysis.opencravat_result.preview_rows.length)}
+                        tone="neutral"
+                      />
+                    </div>
+                    {analysis.opencravat_result.error_message ? (
+                      <p className="reportNotice">
+                        <strong>OpenCRAVAT note:</strong> {analysis.opencravat_result.error_message}
+                      </p>
+                    ) : null}
+                    <div className="resultList">
+                      {analysis.opencravat_result.preview_rows.length ? (
+                        analysis.opencravat_result.preview_rows.map((row, index) => (
+                          <article key={`opencravat-row-${index}`} className="resultListItem resultListStatic">
+                            <strong>
+                              {(row.columns["Chrom"] || row.columns["chrom"] || ".")}:
+                              {(row.columns["Position"] || row.columns["pos"] || ".")}{" "}
+                              {(row.columns["Ref Base"] || row.columns["ref_base"] || ".")}&gt;
+                              {(row.columns["Alt Base"] || row.columns["alt_base"] || ".")}
+                            </strong>
+                            <span>
+                              {Object.entries(row.columns)
+                                .slice(0, 6)
+                                .map(([key, value]) => `${key}=${value}`)
+                                .join(" | ")}
+                            </span>
+                          </article>
+                        ))
+                      ) : (
+                        <p className="emptyState">No OpenCRAVAT preview rows are available.</p>
+                      )}
+                    </div>
+                    <div className="resultActionRow">
+                      {analysis.opencravat_result.variant_table_path ? (
+                        <a
+                          className="sourceAddButton"
+                          href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                            analysis.opencravat_result.variant_table_path,
+                          )}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open variant table
+                        </a>
+                      ) : null}
+                      {analysis.opencravat_result.status_json_path ? (
+                        <a
+                          className="sourceAddButton"
+                          href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                            analysis.opencravat_result.status_json_path,
+                          )}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open status JSON
+                        </a>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <p className="emptyState">No OpenCRAVAT result is available for the current analysis.</p>
+                )}
+              </div>
+            </section>
+          ) : null}
+
+          {analysis && activeStudioView === "ldblockshow" ? (
+            <section className="notebookPanel studioCanvasPanel">
+              <div className="notebookHeader">
+                <h2>LD Block Review</h2>
+              </div>
+              <div className="studioCanvasBody">
+                {analysis.ldblockshow_result ? (
+                  <>
+                    <div className="resultMetricGrid">
+                      <MetricTile label="Region" value={analysis.ldblockshow_result.region} tone="good" />
+                      <MetricTile
+                        label="Tried regions"
+                        value={String(analysis.ldblockshow_result.attempted_regions?.length ?? 0)}
+                        tone="neutral"
+                      />
+                      <MetricTile
+                        label="Site rows"
+                        value={String(analysis.ldblockshow_result.site_row_count ?? 0)}
+                        tone="neutral"
+                      />
+                      <MetricTile
+                        label="Triangle pairs"
+                        value={String(analysis.ldblockshow_result.triangle_pair_count ?? 0)}
+                        tone="neutral"
+                      />
+                      <MetricTile
+                        label="Warnings"
+                        value={String(analysis.ldblockshow_result.warnings.length)}
+                        tone="neutral"
+                      />
+                      <MetricTile label="Tool" value={analysis.ldblockshow_result.tool} tone="neutral" />
+                    </div>
+                    <div className="resultList">
+                      {analysis.ldblockshow_result.attempted_regions?.length ? (
+                        <article className="resultListItem resultListStatic">
+                          <strong>Attempted regions</strong>
+                          <span>{analysis.ldblockshow_result.attempted_regions.join(" -> ")}</span>
+                        </article>
+                      ) : null}
+                      {analysis.ldblockshow_result.warnings.length ? (
+                        analysis.ldblockshow_result.warnings.map((warning, index) => (
+                          <article key={`ldblockshow-warning-${index}`} className="resultListItem resultListStatic">
+                            <strong>Warning {index + 1}</strong>
+                            <span>{warning}</span>
+                          </article>
+                        ))
+                      ) : (
+                        <p className="emptyState">No LDBlockShow warnings were reported.</p>
+                      )}
+                    </div>
+                    <div className="resultActionRow">
+                      {analysis.ldblockshow_result.svg_path ? (
+                        <a
+                          className="sourceAddButton"
+                          href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                            analysis.ldblockshow_result.svg_path,
+                          )}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open LD SVG
+                        </a>
+                      ) : null}
+                      {analysis.ldblockshow_result.block_path ? (
+                        <a
+                          className="sourceAddButton"
+                          href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                            analysis.ldblockshow_result.block_path,
+                          )}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open block table
+                        </a>
+                      ) : null}
+                      {analysis.ldblockshow_result.site_path ? (
+                        <a
+                          className="sourceAddButton"
+                          href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                            analysis.ldblockshow_result.site_path,
+                          )}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open site table
+                        </a>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <p className="emptyState">No LDBlockShow result is available for the current analysis.</p>
+                )}
+              </div>
+            </section>
+          ) : null}
+
+          {analysis && activeStudioView === "table" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>Variant Table</h2>
@@ -1703,7 +2374,7 @@ export default function Page() {
             </section>
           ) : null}
 
-          {activeStudioView === "symbolic" ? (
+          {analysis && activeStudioView === "symbolic" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>Symbolic ALT Review</h2>
@@ -1746,7 +2417,7 @@ export default function Page() {
             </section>
           ) : null}
 
-          {activeStudioView === "roh" ? (
+          {analysis && activeStudioView === "roh" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>ROH / Recessive Review</h2>
@@ -1817,7 +2488,7 @@ export default function Page() {
             </section>
           ) : null}
 
-          {activeStudioView === "clinvar" ? (
+          {analysis && activeStudioView === "clinvar" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>ClinVar Review</h2>
@@ -1863,7 +2534,7 @@ export default function Page() {
             </section>
           ) : null}
 
-          {activeStudioView === "vep" ? (
+          {analysis && activeStudioView === "vep" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>VEP Consequence</h2>
@@ -1883,7 +2554,7 @@ export default function Page() {
             </section>
           ) : null}
 
-          {activeStudioView === "references" ? (
+          {analysis && activeStudioView === "references" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>References</h2>
@@ -1903,7 +2574,7 @@ export default function Page() {
             </section>
           ) : null}
 
-          {activeStudioView === "igv" ? (
+          {analysis && activeStudioView === "igv" ? (
             <section className="studioCanvasPanel">
               <IgvBrowser
                 buildGuess={analysis.facts.genome_build_guess ?? null}
@@ -1913,7 +2584,7 @@ export default function Page() {
             </section>
           ) : null}
 
-          {activeStudioView === "annotations" ? (
+          {analysis && activeStudioView === "annotations" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>Annotations</h2>

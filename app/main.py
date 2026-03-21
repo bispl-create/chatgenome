@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import json
+import subprocess
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -8,7 +11,7 @@ from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from app.models import (
     AnalysisFacts,
@@ -16,6 +19,10 @@ from app.models import (
     AnalysisChatResponse,
     AnalysisJobResponse,
     AnalysisResponse,
+    LDBlockShowRequest,
+    LDBlockShowResponse,
+    OpenCravatRequest,
+    OpenCravatResponse,
     CountSummaryItem,
     DetailedCountSummaryItem,
     CmplotAssociationRequest,
@@ -23,6 +30,9 @@ from app.models import (
     FilterResponse,
     FromPathRequest,
     RankedCandidate,
+    RawQcChatRequest,
+    RawQcChatResponse,
+    RawQcResponse,
     RohSegment,
     RPlotRequest,
     RPlotResponse,
@@ -37,9 +47,12 @@ from app.models import (
 )
 from app.services.annotation import build_draft_answer, build_ui_cards
 from app.services.candidate_ranking import build_ranked_candidates
-from app.services.chat import answer_analysis_chat
+from app.services.chat import answer_analysis_chat, answer_raw_qc_chat
+from app.services.fastqc import FASTQC_OUTPUT_DIR
 from app.services.filtering import run_filter
 from app.services.jobs import create_job, get_job, run_job
+from app.services.ldblockshow import LDBLOCKSHOW_OUTPUT_DIR, run_ldblockshow
+from app.services.opencravat import OPENCRAVAT_OUTPUT_DIR, run_opencravat
 from app.services.recommendation import build_recommendations
 from app.services.references import build_reference_bundle
 from app.services.r_vcf_plots import RPLOT_OUTPUT_DIR, run_cmplot_association, run_r_vcf_plots
@@ -83,6 +96,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+ANALYSIS_UPLOAD_DIR = ROOT_DIR / "uploads" / "analysis"
+PLUGINS_DIR = ROOT_DIR / "plugins"
+
+
+def _annotation_key(item: VariantAnnotation) -> tuple[str, int, str, tuple[str, ...]]:
+    return (item.contig, item.pos_1based, item.ref, tuple(item.alts))
+
+
+def _snpeff_genome_from_build(genome_build_guess: str | None) -> str:
+    value = (genome_build_guess or "").lower()
+    if any(token in value for token in ("38", "hg38", "grch38")):
+        return "GRCh38.99"
+    return "GRCh37.75"
+
+
+def _opencravat_genome_from_build(genome_build_guess: str | None) -> str:
+    value = (genome_build_guess or "").lower()
+    if any(token in value for token in ("38", "hg38", "grch38")):
+        return "hg38"
+    return "hg19"
+
 
 def _analyze_vcf(
     path: str,
@@ -125,17 +160,69 @@ def _analyze_vcf(
             scope=annotation_scope,
             limit=annotation_limit,
         )
+    snpeff_result: SnpEffResponse | None = None
+    try:
+        snpeff_payload = run_tool(
+            "snpeff_execution_tool",
+            {
+                "vcf_path": path,
+                "genome": _snpeff_genome_from_build(facts.genome_build_guess),
+                "output_prefix": f"{Path(path).stem}.aux",
+                "parse_limit": 10,
+            },
+        )
+        snpeff_result = SnpEffResponse(**snpeff_payload)
+        used_tools.append("snpeff_execution_tool")
+    except Exception:
+        snpeff_result = None
+    opencravat_result: OpenCravatResponse | None = None
     try:
         roh_result = run_tool("roh_analysis_tool", {"vcf_path": path})
         roh_segments = [RohSegment(**item) for item in roh_result["roh_segments"]]
         used_tools.append("roh_analysis_tool")
     except Exception:
         roh_segments = run_roh_analysis(path)
+
+    preliminary_candidates = build_ranked_candidates(annotations, roh_segments, limit=24)
+    shortlisted_annotations = [entry.item for entry in preliminary_candidates]
+    try:
+        cadd_result = run_tool(
+            "cadd_lookup_tool",
+            {
+                "annotations": [item.model_dump() for item in shortlisted_annotations],
+                "genome_build_guess": facts.genome_build_guess,
+            },
+        )
+        enriched_shortlisted_annotations = [VariantAnnotation(**item) for item in cadd_result["annotations"]]
+        if bool(cadd_result.get("lookup_performed")):
+            used_tools.append("cadd_lookup_tool")
+        enriched_by_key = {_annotation_key(item): item for item in enriched_shortlisted_annotations}
+        annotations = [enriched_by_key.get(_annotation_key(item), item) for item in annotations]
+    except Exception:
+        enriched_shortlisted_annotations = shortlisted_annotations
+
+    try:
+        revel_result = run_tool(
+            "revel_lookup_tool",
+            {
+                "annotations": [item.model_dump() for item in enriched_shortlisted_annotations],
+                "genome_build_guess": facts.genome_build_guess,
+            },
+        )
+        revel_enriched_annotations = [VariantAnnotation(**item) for item in revel_result["annotations"]]
+        if bool(revel_result.get("lookup_performed")):
+            used_tools.append("revel_lookup_tool")
+        revel_by_key = {_annotation_key(item): item for item in revel_enriched_annotations}
+        annotations = [revel_by_key.get(_annotation_key(item), item) for item in annotations]
+        enriched_shortlisted_annotations = [revel_by_key.get(_annotation_key(item), item) for item in enriched_shortlisted_annotations]
+    except Exception:
+        pass
+
     try:
         candidate_result = run_tool(
             "candidate_ranking_tool",
             {
-                "annotations": [item.model_dump() for item in annotations],
+                "annotations": [item.model_dump() for item in enriched_shortlisted_annotations],
                 "roh_segments": [item.model_dump() for item in roh_segments],
                 "limit": 8,
             },
@@ -143,7 +230,7 @@ def _analyze_vcf(
         candidate_variants = [RankedCandidate(**item) for item in candidate_result["candidate_variants"]]
         used_tools.append("candidate_ranking_tool")
     except Exception:
-        candidate_variants = build_ranked_candidates(annotations, roh_segments, limit=8)
+        candidate_variants = build_ranked_candidates(enriched_shortlisted_annotations, roh_segments, limit=8)
     try:
         clinvar_result = run_tool(
             "clinvar_review_tool",
@@ -266,6 +353,9 @@ def _analyze_vcf(
         facts=facts,
         annotations=annotations,
         roh_segments=roh_segments,
+        source_vcf_path=path,
+        snpeff_result=snpeff_result,
+        opencravat_result=opencravat_result,
         candidate_variants=candidate_variants,
         clinvar_summary=clinvar_summary,
         consequence_summary=consequence_summary,
@@ -281,6 +371,37 @@ def _analyze_vcf(
     )
 
 
+def _is_raw_qc_filename(file_name: str) -> bool:
+    lowered = file_name.lower()
+    return lowered.endswith((".fastq", ".fastq.gz", ".fq", ".fq.gz", ".bam", ".sam"))
+
+
+def _safe_fastqc_artifact_path(path_str: str) -> Path:
+    candidate = Path(path_str).resolve()
+    root = FASTQC_OUTPUT_DIR.resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Access to the requested FastQC artifact is not allowed.") from exc
+    if not candidate.exists():
+        raise HTTPException(status_code=404, detail=f"Output file not found: {candidate}")
+    return candidate
+
+
+def _analyze_raw_qc(path: str, original_name: str) -> RawQcResponse:
+    try:
+        result = run_tool(
+            "fastqc_execution_tool",
+            {
+                "raw_path": path,
+                "original_name": original_name,
+            },
+        )
+        return RawQcResponse(**result)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Raw QC failed: {exc}") from exc
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -294,7 +415,12 @@ def list_registry_tools() -> list[ToolInfo]:
 @app.get("/api/v1/files")
 def get_output_file(path: str = Query(..., description="Absolute path to a generated output file")) -> FileResponse:
     file_path = Path(path).resolve()
-    allowed_roots = [RPLOT_OUTPUT_DIR.resolve()]
+    allowed_roots = [
+        RPLOT_OUTPUT_DIR.resolve(),
+        FASTQC_OUTPUT_DIR.resolve(),
+        OPENCRAVAT_OUTPUT_DIR.resolve(),
+        LDBLOCKSHOW_OUTPUT_DIR.resolve(),
+    ]
     if not any(root == file_path or root in file_path.parents for root in allowed_roots):
         raise HTTPException(status_code=403, detail="Access to the requested file is not allowed.")
     if not file_path.exists():
@@ -351,6 +477,11 @@ def chat_about_analysis(request: AnalysisChatRequest) -> AnalysisChatResponse:
     return answer_analysis_chat(request)
 
 
+@app.post("/api/v1/chat/raw-qc", response_model=RawQcChatResponse)
+def chat_about_raw_qc(request: RawQcChatRequest) -> RawQcChatResponse:
+    return answer_raw_qc_chat(request)
+
+
 @app.post("/api/v1/workflow/start", response_model=WorkflowAgentResponse)
 def begin_workflow(request: WorkflowStartRequest) -> WorkflowAgentResponse:
     return start_workflow(request)
@@ -381,6 +512,55 @@ def run_snpeff_annotation(request: SnpEffRequest) -> SnpEffResponse:
         raise HTTPException(status_code=400, detail=f"SnpEff failed: {exc}") from exc
 
 
+@app.post("/api/v1/opencravat/run", response_model=OpenCravatResponse)
+def run_opencravat_annotation(request: OpenCravatRequest) -> OpenCravatResponse:
+    try:
+        plugin_run = PLUGINS_DIR / "opencravat_execution_tool" / "run.py"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "opencravat_input.json"
+            output_path = Path(tmpdir) / "opencravat_output.json"
+            input_path.write_text(json.dumps(request.model_dump()), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(plugin_run),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                ],
+                cwd=str(ROOT_DIR),
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(ROOT_DIR),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raw_message = completed.stderr.strip() or completed.stdout.strip() or "Unknown OpenCRAVAT failure"
+                lines = [line.strip() for line in raw_message.splitlines() if line.strip()]
+                message = lines[-1] if lines else raw_message
+                raise RuntimeError(message)
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            return OpenCravatResponse(**payload)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"OpenCRAVAT failed: {exc}") from exc
+
+
+@app.post("/api/v1/ldblockshow/run", response_model=LDBlockShowResponse)
+def run_ldblockshow_plot(request: LDBlockShowRequest) -> LDBlockShowResponse:
+    try:
+        return run_ldblockshow(request)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"LDBlockShow failed: {exc}") from exc
+
+
 @app.post("/api/v1/r/plots", response_model=RPlotResponse)
 def run_r_plots(request: RPlotRequest) -> RPlotResponse:
     try:
@@ -407,24 +587,52 @@ async def analyze_upload(
     annotation_scope: str = Form("representative"),
     annotation_limit: Optional[int] = Form(None),
 ) -> AnalysisResponse:
-    suffix = Path(file.filename or "upload.vcf").suffix
-    if suffix not in {".vcf", ".gz"}:
+    original_name = file.filename or "upload.vcf"
+    suffixes = Path(original_name).suffixes
+    combined_suffix = "".join(suffixes) or Path(original_name).suffix or ".vcf"
+    if not (combined_suffix.endswith(".vcf") or combined_suffix.endswith(".vcf.gz")):
         raise HTTPException(status_code=400, detail="Only .vcf and .vcf.gz uploads are supported.")
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
+    ANALYSIS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in Path(original_name).stem)
+    durable_path = ANALYSIS_UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}_{safe_stem}{combined_suffix}"
+    durable_path.write_bytes(await file.read())
 
     try:
         return _analyze_vcf(
-            tmp_path,
+            str(durable_path),
             annotation_scope=annotation_scope,
             annotation_limit=annotation_limit,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Analysis failed: {exc}") from exc
+
+
+@app.post("/api/v1/raw-qc/upload", response_model=RawQcResponse)
+async def analyze_raw_qc_upload(file: UploadFile = File(...)) -> RawQcResponse:
+    filename = file.filename or "upload.fastq.gz"
+    if not _is_raw_qc_filename(filename):
+        raise HTTPException(
+            status_code=400,
+            detail="Only FASTQ, FASTQ.gz, FQ, FQ.gz, BAM, and SAM uploads are supported.",
+        )
+
+    suffixes = "".join(Path(filename).suffixes) or Path(filename).suffix or ".dat"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffixes) as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+
+    try:
+        return _analyze_raw_qc(tmp_path, filename)
     finally:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+@app.get("/api/v1/raw-qc/report")
+def get_raw_qc_report(path: str = Query(..., description="Absolute path to a FastQC artifact under outputs/fastqc")):
+    artifact_path = _safe_fastqc_artifact_path(path)
+    if artifact_path.suffix.lower() == ".html":
+        return HTMLResponse(artifact_path.read_text(encoding="utf-8"))
+    return FileResponse(artifact_path, media_type="application/zip", filename=artifact_path.name)

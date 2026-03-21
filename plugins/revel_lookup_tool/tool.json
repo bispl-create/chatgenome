@@ -1,0 +1,8 @@
+{
+  "name": "revel_lookup_tool",
+  "description": "Enrich shortlisted missense variants with local REVEL scores when a matching local segment file is available.",
+  "task": "missense-score-lookup",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "local"
+}

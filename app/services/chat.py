@@ -4,8 +4,48 @@ import json
 import os
 import re
 import urllib.request
+from pathlib import Path
 
-from app.models import AnalysisChatRequest, AnalysisChatResponse
+from app.models import AnalysisChatRequest, AnalysisChatResponse, RawQcChatRequest, RawQcChatResponse
+from app.models import LDBlockShowRequest, LDBlockShowResponse, OpenCravatRequest, OpenCravatResponse, SnpEffRequest
+from app.services.ldblockshow import run_ldblockshow
+from app.services.opencravat import OPENCRAVAT_OUTPUT_DIR, load_opencravat_result, run_opencravat
+from app.services.snpeff import run_snpeff
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+PLUGINS_DIR = ROOT_DIR / "plugins"
+
+
+def _load_direct_tool_routing_specs() -> list[dict[str, object]]:
+    specs: list[dict[str, object]] = []
+    for tool_name in (
+        "opencravat_execution_tool",
+        "ldblockshow_execution_tool",
+        "snpeff_execution_tool",
+    ):
+        manifest = PLUGINS_DIR / tool_name / "tool.json"
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        routing = payload.get("routing")
+        if isinstance(routing, dict):
+            specs.append({"name": payload.get("name", tool_name), "routing": routing})
+    return specs
+
+
+def _match_direct_tool_request(question: str) -> dict[str, object] | None:
+    lowered = question.lower()
+    for spec in _load_direct_tool_routing_specs():
+        routing = spec.get("routing") or {}
+        trigger_keywords = [str(item).lower() for item in routing.get("trigger_keywords", [])]
+        execution_intents = [str(item).lower() for item in routing.get("execution_intents", [])]
+        if not any(keyword in lowered for keyword in trigger_keywords):
+            continue
+        if execution_intents and not any(intent in lowered for intent in execution_intents):
+            continue
+        return spec
+    return None
 
 
 def _is_korean(text: str) -> bool:
@@ -22,6 +62,7 @@ def _flatten_studio_context(studio_context: dict) -> dict[str, object]:
         "candidate_variants": studio_context.get("candidate_variants"),
         "clinvar_review": studio_context.get("clinvar_review"),
         "vep_consequence": studio_context.get("vep_consequence"),
+        "snpeff_preview": studio_context.get("snpeff_preview"),
         "selected_annotation": studio_context.get("selected_annotation"),
     }
 
@@ -31,6 +72,15 @@ def _compact_analysis_context(payload: AnalysisChatRequest) -> dict[str, object]
     context = {
         "analysis_id": analysis.analysis_id,
         "draft_answer": analysis.draft_answer,
+        "used_tools": analysis.used_tools,
+        "tool_registry": [
+            {
+                "name": item.name,
+                "task": item.task,
+                "source": item.source,
+            }
+            for item in analysis.tool_registry
+        ],
         "facts": {
             "file_name": analysis.facts.file_name,
             "genome_build_guess": analysis.facts.genome_build_guess,
@@ -51,6 +101,59 @@ def _compact_analysis_context(payload: AnalysisChatRequest) -> dict[str, object]
             }
             for item in payload.analysis.annotations[:6]
         ],
+        "snpeff_result": (
+            {
+                "tool": payload.analysis.snpeff_result.tool,
+                "genome": payload.analysis.snpeff_result.genome,
+                "output_path": payload.analysis.snpeff_result.output_path,
+                "parsed_records": [
+                    {
+                        "contig": item.contig,
+                        "pos_1based": item.pos_1based,
+                        "ref": item.ref,
+                        "alt": item.alt,
+                        "ann": [
+                            {
+                                "annotation": ann.annotation,
+                                "impact": ann.impact,
+                                "gene_name": ann.gene_name,
+                                "hgvs_c": ann.hgvs_c,
+                                "hgvs_p": ann.hgvs_p,
+                            }
+                            for ann in item.ann[:3]
+                        ],
+                    }
+                    for item in payload.analysis.snpeff_result.parsed_records[:5]
+                ],
+            }
+            if payload.analysis.snpeff_result
+            else None
+        ),
+        "opencravat_result": (
+            {
+                "tool": payload.analysis.opencravat_result.tool,
+                "genome": payload.analysis.opencravat_result.genome,
+                "status": payload.analysis.opencravat_result.status,
+                "variant_table_path": payload.analysis.opencravat_result.variant_table_path,
+                "preview_rows": [
+                    item.columns for item in payload.analysis.opencravat_result.preview_rows[:5]
+                ],
+            }
+            if payload.analysis.opencravat_result
+            else None
+        ),
+        "ldblockshow_result": (
+            {
+                "tool": payload.analysis.ldblockshow_result.tool,
+                "region": payload.analysis.ldblockshow_result.region,
+                "svg_path": payload.analysis.ldblockshow_result.svg_path,
+                "png_path": payload.analysis.ldblockshow_result.png_path,
+                "pdf_path": payload.analysis.ldblockshow_result.pdf_path,
+                "warnings": payload.analysis.ldblockshow_result.warnings,
+            }
+            if payload.analysis.ldblockshow_result
+            else None
+        ),
         "roh_segments": [
             {
                 "sample": item.sample,
@@ -213,6 +316,66 @@ def _studio_guided_answer(payload: AnalysisChatRequest) -> AnalysisChatResponse 
         )
         return AnalysisChatResponse(answer=answer, citations=citations, used_fallback=False)
 
+    if "opencravat" in question or "open cravat" in question:
+        result = payload.analysis.opencravat_result
+        if result is None:
+            answer = (
+                "현재 분석 컨텍스트에는 OpenCRAVAT 실행 결과가 없습니다.\n\n"
+                "- 즉, 이 분석에서 OpenCRAVAT가 실행되었다고 확인할 수 있는 artifact가 아직 없습니다.\n"
+                "- 원하시면 `Run OpenCRAVAT on this VCF`처럼 명시적으로 실행 요청을 하거나, "
+                "OpenCRAVAT가 포함된 새 분석을 다시 실행해야 합니다."
+            )
+            return AnalysisChatResponse(answer=answer, citations=citations, used_fallback=False)
+
+        preview_lines = [
+            "- "
+            + " | ".join(f"{key}={value}" for key, value in list(item.columns.items())[:6])
+            for item in result.preview_rows[:5]
+        ]
+        artifact = result.variant_table_path or result.text_report_path or result.sqlite_path or "not available"
+        note_line = f"- note: {result.error_message}" if result.error_message else None
+        answer = (
+            "OpenCRAVAT Review 카드 설명입니다.\n\n"
+            "1. 현재 실행 상태\n"
+            f"- status: {result.status or 'unknown'}\n"
+            f"- genome: {result.genome}\n"
+            f"- primary artifact: {artifact}\n"
+            f"{note_line + chr(10) if note_line else ''}\n"
+            "2. preview rows\n"
+            f"{chr(10).join(preview_lines) if preview_lines else '- preview rows가 없습니다.'}\n\n"
+            "3. 해석\n"
+            "- OpenCRAVAT는 composite annotation을 붙이는 보조 도구입니다.\n"
+            "- status가 `Error`여도 일부 intermediate artifact가 생성되어 preview가 보일 수 있습니다.\n"
+            "- 최종 해석은 candidate ranking, ClinVar, consequence 결과와 함께 봐야 합니다."
+        )
+        return AnalysisChatResponse(answer=answer, citations=citations, used_fallback=False)
+
+    if "ldblockshow" in question or "ld block" in question or "ld heatmap" in question:
+        result = payload.analysis.ldblockshow_result
+        if result is None:
+            answer = (
+                "현재 분석 컨텍스트에는 LDBlockShow 결과 artifact가 포함되어 있지 않습니다.\n\n"
+                "- 즉, 이번 분석에서 LD heatmap이 이미 생성되었다고 말할 수는 없습니다.\n"
+                "- LDBlockShow는 메인 분석의 기본 자동 단계가 아니라 region 기반 on-demand 도구입니다.\n"
+                "- 원하시면 region을 지정해서 별도로 실행해야 합니다. 예: `Run LDBlockShow on chr11:24100000:24200000`"
+            )
+            return AnalysisChatResponse(answer=answer, citations=citations, used_fallback=False)
+
+        artifact = result.svg_path or result.png_path or result.pdf_path or "not available"
+        warning_lines = [f"- {item}" for item in result.warnings[:6]]
+        answer = (
+            "LD Block Review 결과입니다.\n\n"
+            "1. 현재 실행 상태\n"
+            f"- region: {result.region}\n"
+            f"- primary artifact: {artifact}\n\n"
+            "2. warnings\n"
+            f"{chr(10).join(warning_lines) if warning_lines else '- no warnings'}\n\n"
+            "3. 해석\n"
+            "- 이 결과는 지정한 locus에 대한 LD heatmap 시각화입니다.\n"
+            "- block file, site file, triangle matrix와 함께 보조적으로 해석할 수 있습니다."
+        )
+        return AnalysisChatResponse(answer=answer, citations=citations, used_fallback=False)
+
     return None
 
 
@@ -267,6 +430,9 @@ def _call_openai(payload: AnalysisChatRequest) -> AnalysisChatResponse:
     system_prompt = (
         "You are a genomics analysis copilot. Answer only from the provided VCF analysis context. "
         "Do not invent variant facts. Be concise, grounded, and mention uncertainty. "
+        "Treat analysis.used_tools as the authoritative record of which deterministic tools were actually run in the current analysis. "
+        "Do not claim that a tool was used unless it appears in analysis.used_tools or the user explicitly requests a new run. "
+        "Do not infer tool execution only from card names such as VEP consequence summaries. "
         "Treat studio_context as part of the trusted analysis state, including ROH, coverage, candidate, ClinVar, and consequence summaries when present. "
         "When possible, cite reference ids like REF1 or REF4 inline. "
         "Format the answer in clean Markdown with short sections or bullet points when helpful. "
@@ -317,8 +483,364 @@ def _call_openai(payload: AnalysisChatRequest) -> AnalysisChatResponse:
     )
 
 
+def _extract_ldblockshow_region(question: str) -> str | None:
+    match = re.search(r"((?:chr)?[A-Za-z0-9_]+):(\d+)(?:[:-])(\d+)", question, flags=re.IGNORECASE)
+    if not match:
+        return None
+    chrom, start, end = match.group(1), match.group(2), match.group(3)
+    return f"{chrom}:{start}:{end}"
+
+
+def _snpeff_genome_from_build(build_guess: str | None) -> str:
+    guess = (build_guess or "").lower()
+    if any(token in guess for token in ("38", "hg38", "grch38")):
+        return "GRCh38.99"
+    return "GRCh37.75"
+
+
+def _handle_opencravat_request(payload: AnalysisChatRequest) -> AnalysisChatResponse:
+    source_vcf_path = payload.analysis.source_vcf_path
+    if not source_vcf_path:
+        opencravat_result = OpenCravatResponse(
+            tool="opencravat",
+            genome="unknown",
+            input_path="",
+            output_dir="",
+            run_name="",
+            command_preview="oc run <source.vcf> ...",
+            status="Error",
+            error_message="The current analysis context does not include a source VCF path.",
+        )
+        return AnalysisChatResponse(
+            answer="The current analysis context does not include a source VCF path, so OpenCRAVAT cannot be run from this chat turn.",
+            citations=[],
+            used_fallback=True,
+            used_tools=["opencravat_execution_tool"],
+            opencravat_result=opencravat_result,
+        )
+
+    genome_guess = (payload.analysis.facts.genome_build_guess or "").lower()
+    genome = "hg38" if any(token in genome_guess for token in ("38", "hg38", "grch38")) else "hg19"
+    run_name = f"{payload.analysis.analysis_id}-opencravat"
+
+    if payload.analysis.opencravat_result and payload.analysis.opencravat_result.run_name == run_name:
+        existing = payload.analysis.opencravat_result
+        status_line = existing.status or "unknown"
+        artifact_line = existing.text_report_path or existing.variant_table_path or existing.sqlite_path or "not available"
+        return AnalysisChatResponse(
+            answer=(
+                f"OpenCRAVAT results are already available for the current VCF using genome `{existing.genome}`.\n\n"
+                f"- Status: `{status_line}`\n"
+                f"- Primary artifact: `{artifact_line}`\n"
+                f"- Preview rows: {len(existing.preview_rows)}\n\n"
+                "The existing OpenCRAVAT Review card has been reused instead of rerunning the tool."
+            ),
+            citations=[],
+            used_fallback=False,
+            used_tools=["opencravat_execution_tool"],
+            opencravat_result=existing,
+        )
+
+    cached = load_opencravat_result(
+        genome=genome,
+        input_path=source_vcf_path,
+        output_dir=OPENCRAVAT_OUTPUT_DIR,
+        run_name=run_name,
+        preview_limit=5,
+    )
+    if cached is not None:
+        status_line = cached.status or "unknown"
+        artifact_line = cached.text_report_path or cached.variant_table_path or cached.sqlite_path or "not available"
+        return AnalysisChatResponse(
+            answer=(
+                f"OpenCRAVAT cached results were found for the current VCF using genome `{cached.genome}`.\n\n"
+                f"- Status: `{status_line}`\n"
+                f"- Primary artifact: `{artifact_line}`\n"
+                f"- Preview rows: {len(cached.preview_rows)}\n\n"
+                "The existing OpenCRAVAT Review card has been restored without rerunning the tool."
+            ),
+            citations=[],
+            used_fallback=False,
+            used_tools=["opencravat_execution_tool"],
+            opencravat_result=cached,
+        )
+
+    result = run_opencravat(
+        OpenCravatRequest(
+            vcf_path=source_vcf_path,
+            genome=genome,
+            run_name=run_name,
+            report_types=["text"],
+            preview_limit=5,
+        )
+    )
+
+    status_line = result.status or "unknown"
+    artifact_line = result.text_report_path or result.variant_table_path or result.sqlite_path or "not available"
+    answer = (
+        f"OpenCRAVAT was run on the current VCF using genome `{result.genome}`.\n\n"
+        f"- Status: `{status_line}`\n"
+        f"- Primary artifact: `{artifact_line}`\n"
+        f"- Preview rows: {len(result.preview_rows)}\n\n"
+        "The Studio card has been updated with the latest OpenCRAVAT result."
+    )
+    return AnalysisChatResponse(
+        answer=answer,
+        citations=[],
+        used_fallback=False,
+        used_tools=["opencravat_execution_tool"],
+        opencravat_result=result,
+    )
+
+
+def _handle_snpeff_request(payload: AnalysisChatRequest) -> AnalysisChatResponse:
+    source_vcf_path = payload.analysis.source_vcf_path
+    if not source_vcf_path:
+        return AnalysisChatResponse(
+            answer="The current analysis context does not include a source VCF path, so SnpEff cannot be run from this chat turn.",
+            citations=[],
+            used_fallback=True,
+            used_tools=["snpeff_execution_tool"],
+        )
+
+    existing = payload.analysis.snpeff_result
+    if existing is not None:
+        return AnalysisChatResponse(
+            answer=(
+                f"SnpEff results are already available for the current VCF using genome `{existing.genome}`.\n\n"
+                f"- Output path: `{existing.output_path}`\n"
+                f"- Preview records: {len(existing.parsed_records)}\n\n"
+                "The existing SnpEff Review card has been reused instead of rerunning the tool."
+            ),
+            citations=[],
+            used_fallback=False,
+            used_tools=["snpeff_execution_tool"],
+        )
+
+    result = run_snpeff(
+        SnpEffRequest(
+            vcf_path=source_vcf_path,
+            genome=_snpeff_genome_from_build(payload.analysis.facts.genome_build_guess),
+            output_prefix=f"{payload.analysis.analysis_id}-snpeff",
+            parse_limit=10,
+        )
+    )
+    return AnalysisChatResponse(
+        answer=(
+            f"SnpEff was run on the current VCF using genome `{result.genome}`.\n\n"
+            f"- Output path: `{result.output_path}`\n"
+            f"- Preview records: {len(result.parsed_records)}\n\n"
+            "The SnpEff Review card has been updated with the latest result."
+        ),
+        citations=[],
+        used_fallback=False,
+        used_tools=["snpeff_execution_tool"],
+    )
+
+
+def _handle_ldblockshow_request(payload: AnalysisChatRequest) -> AnalysisChatResponse:
+    source_vcf_path = payload.analysis.source_vcf_path
+    region = _extract_ldblockshow_region(payload.question)
+
+    if not source_vcf_path:
+        return AnalysisChatResponse(
+            answer="The current analysis context does not include a source VCF path, so LDBlockShow cannot be run from this chat turn.",
+            citations=[],
+            used_fallback=True,
+            used_tools=["ldblockshow_execution_tool"],
+            ldblockshow_result=LDBlockShowResponse(
+                tool="ldblockshow",
+                input_path="",
+                region=region or "unknown",
+                output_prefix="",
+                command_preview="LDBlockShow -InVCF <source.vcf.gz> -Region chr:start:end ...",
+                warnings=["The current analysis context does not include a source VCF path."],
+            ),
+        )
+
+    if not region:
+        return AnalysisChatResponse(
+            answer="LDBlockShow needs a concrete region in `chr:start:end` format. Example: `Run LDBlockShow on chr11:24100000:24200000`.",
+            citations=[],
+            used_fallback=True,
+            used_tools=["ldblockshow_execution_tool"],
+            ldblockshow_result=LDBlockShowResponse(
+                tool="ldblockshow",
+                input_path=source_vcf_path,
+                region="unknown",
+                output_prefix="",
+                command_preview="LDBlockShow -InVCF <source.vcf.gz> -Region chr:start:end ...",
+                warnings=["No valid region was found in the request."],
+            ),
+        )
+
+    result = run_ldblockshow(
+        LDBlockShowRequest(
+            vcf_path=source_vcf_path,
+            region=region,
+            sele_var=2,
+            block_type=5,
+            out_png=False,
+            out_pdf=False,
+        )
+    )
+    answer = (
+        f"LDBlockShow was run on the current VCF for region `{result.region}`.\n\n"
+        f"- Primary artifact: `{result.svg_path or result.png_path or result.pdf_path or 'not available'}`\n"
+        f"- Block table: `{result.block_path or 'not available'}`\n"
+        f"- Warnings: {len(result.warnings)}\n\n"
+        "The Studio card has been updated with the latest LD block result."
+    )
+    return AnalysisChatResponse(
+        answer=answer,
+        citations=[],
+        used_fallback=False,
+        used_tools=["ldblockshow_execution_tool"],
+        ldblockshow_result=result,
+    )
+
+
 def answer_analysis_chat(payload: AnalysisChatRequest) -> AnalysisChatResponse:
+    direct_tool = _match_direct_tool_request(payload.question)
+
+    if direct_tool and direct_tool.get("name") == "ldblockshow_execution_tool":
+        try:
+            return _handle_ldblockshow_request(payload)
+        except Exception as exc:
+            region = _extract_ldblockshow_region(payload.question) or "unknown"
+            return AnalysisChatResponse(
+                answer=f"LDBlockShow execution failed: {exc}",
+                citations=[],
+                used_fallback=True,
+                used_tools=["ldblockshow_execution_tool"],
+                ldblockshow_result=LDBlockShowResponse(
+                    tool="ldblockshow",
+                    input_path=payload.analysis.source_vcf_path or "",
+                    region=region,
+                    output_prefix="",
+                    command_preview="LDBlockShow -InVCF <source.vcf.gz> -Region chr:start:end ...",
+                    attempted_regions=[region] if region != "unknown" else [],
+                    warnings=[str(exc)],
+                ),
+            )
+
+    if direct_tool and direct_tool.get("name") == "opencravat_execution_tool":
+        try:
+            return _handle_opencravat_request(payload)
+        except Exception as exc:
+            genome_guess = (payload.analysis.facts.genome_build_guess or "").lower()
+            genome = "hg38" if any(token in genome_guess for token in ("38", "hg38", "grch38")) else "hg19"
+            opencravat_result = OpenCravatResponse(
+                tool="opencravat",
+                genome=genome,
+                input_path=payload.analysis.source_vcf_path or "",
+                output_dir="",
+                run_name=f"{payload.analysis.analysis_id}-opencravat",
+                command_preview="oc run <source.vcf> ...",
+                status="Error",
+                error_message=str(exc),
+            )
+            return AnalysisChatResponse(
+                answer=f"OpenCRAVAT execution failed: {exc}",
+                citations=[],
+                used_fallback=True,
+                used_tools=["opencravat_execution_tool"],
+                opencravat_result=opencravat_result,
+            )
+
+    if direct_tool and direct_tool.get("name") == "snpeff_execution_tool":
+        try:
+            return _handle_snpeff_request(payload)
+        except Exception as exc:
+            return AnalysisChatResponse(
+                answer=f"SnpEff execution failed: {exc}",
+                citations=[],
+                used_fallback=True,
+                used_tools=["snpeff_execution_tool"],
+            )
     try:
         return _call_openai(payload)
     except Exception:
         return _fallback_answer(payload)
+
+
+def _fallback_raw_qc_answer(payload: RawQcChatRequest) -> RawQcChatResponse:
+    analysis = payload.analysis
+    facts = analysis.facts
+    pass_count = sum(1 for item in analysis.modules if item.status.upper() == "PASS")
+    warn_count = sum(1 for item in analysis.modules if item.status.upper() == "WARN")
+    fail_count = sum(1 for item in analysis.modules if item.status.upper() == "FAIL")
+    module_lines = [
+        f"- {item.name}: {item.status}{f' ({item.detail})' if item.detail else ''}"
+        for item in analysis.modules[:8]
+    ]
+    answer = (
+        f"FastQC reviewed `{facts.file_name}` as a {facts.file_kind} input.\n\n"
+        f"- Total sequences/records: {facts.total_sequences if facts.total_sequences is not None else 'unknown'}\n"
+        f"- Sequence length: {facts.sequence_length or 'unknown'}\n"
+        f"- %GC: {facts.gc_content if facts.gc_content is not None else 'unknown'}\n"
+        f"- Encoding: {facts.encoding or 'unknown'}\n"
+        f"- Module summary: {pass_count} PASS, {warn_count} WARN, {fail_count} FAIL\n\n"
+        "Top module results:\n"
+        f"{chr(10).join(module_lines) if module_lines else '- No module details are available.'}\n\n"
+        "Review failed or warning modules before downstream alignment or variant calling."
+    )
+    return RawQcChatResponse(answer=answer, citations=[], used_fallback=True)
+
+
+def answer_raw_qc_chat(payload: RawQcChatRequest) -> RawQcChatResponse:
+    api_key = os.getenv("OPENAI_API_KEY")
+    model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+    if not api_key:
+        return _fallback_raw_qc_answer(payload)
+
+    compact_context = {
+        "analysis_id": payload.analysis.analysis_id,
+        "draft_answer": payload.analysis.draft_answer,
+        "facts": payload.analysis.facts.model_dump(),
+        "modules": [item.model_dump() for item in payload.analysis.modules[:12]],
+    }
+    system_prompt = (
+        "You are a sequencing QC copilot. Answer only from the provided FastQC context. "
+        "Do not invent QC metrics. Be concise, grounded, and practical. "
+        "If there are WARN or FAIL modules, explain why they matter for downstream genomics workflows."
+    )
+    history_lines = [{"role": turn.role, "content": turn.content} for turn in payload.history[-6:]]
+    user_content = (
+        "Question:\n"
+        f"{payload.question}\n\n"
+        "FastQC context JSON:\n"
+        f"{json.dumps(compact_context, ensure_ascii=False)}"
+    )
+    body = {
+        "model": model,
+        "input": [
+            {"role": "system", "content": system_prompt},
+            *history_lines,
+            {"role": "user", "content": user_content},
+        ],
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "20"))) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        output_text = result.get("output_text")
+        if not output_text:
+            output = result.get("output", [])
+            texts: list[str] = []
+            for item in output:
+                for content in item.get("content", []):
+                    if content.get("type") == "output_text":
+                        texts.append(content.get("text", ""))
+            output_text = "\n".join(texts).strip()
+        return RawQcChatResponse(answer=output_text or _fallback_raw_qc_answer(payload).answer, citations=[], used_fallback=False)
+    except Exception:
+        return _fallback_raw_qc_answer(payload)

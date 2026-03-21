@@ -82,6 +82,11 @@ class VariantAnnotation(BaseModel):
     clinvar_conditions: str
     gnomad_af: str
     source_url: str
+    cadd_raw_score: Optional[float] = None
+    cadd_phred: Optional[float] = None
+    cadd_lookup_status: Optional[str] = None
+    revel_score: Optional[float] = None
+    revel_lookup_status: Optional[str] = None
 
 
 class QualityControlMetrics(BaseModel):
@@ -170,6 +175,10 @@ class AnalysisResponse(BaseModel):
     facts: AnalysisFacts
     annotations: list[VariantAnnotation]
     roh_segments: list[RohSegment]
+    source_vcf_path: Optional[str] = None
+    snpeff_result: Optional[SnpEffResponse] = None
+    opencravat_result: Optional[OpenCravatResponse] = None
+    ldblockshow_result: Optional[LDBlockShowResponse] = None
     candidate_variants: list[RankedCandidate] = []
     clinvar_summary: list[CountSummaryItem] = []
     consequence_summary: list[CountSummaryItem] = []
@@ -204,6 +213,49 @@ class AnalysisChatRequest(BaseModel):
 
 
 class AnalysisChatResponse(BaseModel):
+    answer: str
+    citations: list[str]
+    used_fallback: bool
+    used_tools: list[str] = []
+    opencravat_result: Optional[OpenCravatResponse] = None
+    ldblockshow_result: Optional[LDBlockShowResponse] = None
+
+
+class RawQcFacts(BaseModel):
+    file_name: str
+    file_kind: str
+    total_sequences: Optional[int] = None
+    filtered_sequences: Optional[int] = None
+    poor_quality_sequences: Optional[int] = None
+    sequence_length: Optional[str] = None
+    gc_content: Optional[float] = None
+    encoding: Optional[str] = None
+
+
+class RawQcModule(BaseModel):
+    name: str
+    status: str
+    detail: str = ""
+
+
+class RawQcResponse(BaseModel):
+    analysis_id: str
+    facts: RawQcFacts
+    modules: list[RawQcModule]
+    draft_answer: str
+    report_html_path: Optional[str] = None
+    report_zip_path: Optional[str] = None
+    used_tools: list[str] = []
+    tool_registry: list[ToolInfo] = []
+
+
+class RawQcChatRequest(BaseModel):
+    question: str
+    analysis: RawQcResponse
+    history: list[ChatTurn] = []
+
+
+class RawQcChatResponse(BaseModel):
     answer: str
     citations: list[str]
     used_fallback: bool
@@ -290,6 +342,80 @@ class SnpEffResponse(BaseModel):
     index_path: Optional[str]
     command_preview: str
     parsed_records: list[SnpEffAnnotatedRecord]
+
+
+class OpenCravatRequest(BaseModel):
+    vcf_path: str = Field(..., description="Absolute path to the input VCF or VCF.gz")
+    genome: Literal["hg19", "hg38", "hg18"] = Field(default="hg19", description="Reference genome of the input VCF")
+    output_dir: Optional[str] = Field(default=None, description="Optional output directory for OpenCRAVAT results")
+    run_name: Optional[str] = Field(default=None, description="Optional OpenCRAVAT run name")
+    annotators: list[str] = Field(default_factory=list, description="Optional subset of annotators to run")
+    report_types: list[Literal["excel", "tsv", "vcf", "text", "csv"]] = Field(
+        default_factory=lambda: ["text"],
+        description="Reporter types to request from OpenCRAVAT",
+    )
+    preview_limit: int = Field(default=10, description="Maximum number of text report preview lines to include")
+
+
+class OpenCravatPreviewRow(BaseModel):
+    columns: dict[str, str]
+
+
+class OpenCravatResponse(BaseModel):
+    tool: str
+    genome: str
+    input_path: str
+    output_dir: str
+    run_name: str
+    command_preview: str
+    status: Optional[str] = None
+    error_message: Optional[str] = None
+    status_json_path: Optional[str] = None
+    sqlite_path: Optional[str] = None
+    text_report_path: Optional[str] = None
+    variant_table_path: Optional[str] = None
+    excel_report_path: Optional[str] = None
+    vcf_report_path: Optional[str] = None
+    csv_report_path: Optional[str] = None
+    preview_rows: list[OpenCravatPreviewRow] = []
+
+
+class LDBlockShowRequest(BaseModel):
+    vcf_path: str = Field(..., description="Absolute path to the input VCF or VCF.gz")
+    region: str = Field(..., description="Target locus in chr:start:end format")
+    output_prefix: Optional[str] = Field(
+        default=None,
+        description="Optional output prefix. Results are written under the app LDBlockShow output directory.",
+    )
+    sele_var: Literal[1, 2, 3, 4] = Field(default=2, description="LD statistic mode for LDBlockShow")
+    block_type: Literal[1, 2, 3, 4, 5] = Field(
+        default=5,
+        description="Block display mode. Default 5 avoids extra PLINK-based block calling.",
+    )
+    subgroup_path: Optional[str] = Field(default=None, description="Optional sample subset file")
+    gwas_path: Optional[str] = Field(default=None, description="Optional chr pos pvalue file")
+    gff_path: Optional[str] = Field(default=None, description="Optional GFF3 annotation file")
+    out_png: bool = Field(default=False, description="Request PNG conversion")
+    out_pdf: bool = Field(default=False, description="Request PDF conversion")
+
+
+class LDBlockShowResponse(BaseModel):
+    tool: str
+    input_path: str
+    region: str
+    output_prefix: str
+    command_preview: str
+    svg_path: Optional[str] = None
+    png_path: Optional[str] = None
+    pdf_path: Optional[str] = None
+    block_path: Optional[str] = None
+    site_path: Optional[str] = None
+    triangle_path: Optional[str] = None
+    attempted_regions: list[str] = []
+    site_row_count: int = 0
+    block_row_count: int = 0
+    triangle_pair_count: int = 0
+    warnings: list[str] = []
 
 
 class RPlotRequest(BaseModel):

@@ -47,6 +47,9 @@ def rank_candidate_score(item: VariantAnnotation) -> int:
     if item.genotype == "1/1":
         score += 1
 
+    score += _cadd_bonus(item.cadd_phred)
+    score += _revel_bonus(item.revel_score)
+
     return score
 
 
@@ -82,6 +85,9 @@ def rank_recessive_score(item: VariantAnnotation, roh_segments: list[RohSegment]
     elif "benign" in significance:
         score -= 3
 
+    score += _cadd_bonus(item.cadd_phred)
+    score += _revel_bonus(item.revel_score)
+
     return score
 
 
@@ -110,3 +116,31 @@ def _parse_af(raw_value: str) -> float | None:
         return float(token)
     except ValueError:
         return None
+
+
+def _cadd_bonus(phred: float | None) -> int:
+    if phred is None:
+        return 0
+    if phred >= 30:
+        return 4
+    if phred >= 20:
+        return 3
+    if phred >= 15:
+        return 2
+    if phred >= 10:
+        return 1
+    return 0
+
+
+def _revel_bonus(score: float | None) -> int:
+    if score is None:
+        return 0
+    if score >= 0.9:
+        return 4
+    if score >= 0.75:
+        return 3
+    if score >= 0.5:
+        return 2
+    if score >= 0.25:
+        return 1
+    return 0
