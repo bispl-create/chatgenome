@@ -12,5 +12,20 @@
     "question_argument": "region",
     "result_slot": "ldblockshow_result",
     "execution_mode": "direct_endpoint"
+  },
+  "orchestration": {
+    "tool_kind": "visualization",
+    "default_stage": "post-annotation",
+    "depends_on": ["annotation_tool"],
+    "consumes": ["vcf_path", "region"],
+    "produces": ["ldblockshow_result"],
+    "priority": 70,
+    "on_demand": true
+  },
+  "runtime": {
+    "host_compatible": ["cpu"],
+    "requires_gpu": false,
+    "allow_cpu_fallback": true,
+    "estimated_runtime_sec": 6
   }
 }

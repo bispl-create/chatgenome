@@ -12,5 +12,20 @@
     "question_argument": "none",
     "result_slot": "snpeff_result",
     "execution_mode": "direct_endpoint"
+  },
+  "orchestration": {
+    "tool_kind": "execution",
+    "default_stage": "post-annotation",
+    "depends_on": ["annotation_tool"],
+    "consumes": ["vcf_path"],
+    "produces": ["snpeff_result"],
+    "priority": 80,
+    "on_demand": true
+  },
+  "runtime": {
+    "host_compatible": ["cpu"],
+    "requires_gpu": false,
+    "allow_cpu_fallback": true,
+    "estimated_runtime_sec": 8
   }
 }
