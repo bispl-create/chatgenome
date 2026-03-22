@@ -22,3 +22,11 @@ __pycache__/
 .DS_Store
 snpEff_genes.txt
 snpEff_summary.html
+
+# Local runtimes, downloaded assets, and generated uploads
+.venv/
+.opencravat/
+uploads/
+references/
+third_party/
+data/
