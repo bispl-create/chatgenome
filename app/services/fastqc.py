@@ -65,6 +65,7 @@ def run_fastqc_local(
 
     return RawQcResponse(
         analysis_id=f"fastqc-{uuid.uuid4().hex[:10]}",
+        source_raw_path=input_path,
         facts=facts,
         modules=modules,
         draft_answer=draft_answer,

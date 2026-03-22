@@ -238,8 +238,10 @@ class RawQcModule(BaseModel):
 
 class RawQcResponse(BaseModel):
     analysis_id: str
+    source_raw_path: Optional[str] = None
     facts: RawQcFacts
     modules: list[RawQcModule]
+    samtools_result: Optional[SamtoolsResponse] = None
     draft_answer: str
     report_html_path: Optional[str] = None
     report_zip_path: Optional[str] = None
@@ -257,6 +259,7 @@ class RawQcChatResponse(BaseModel):
     answer: str
     citations: list[str]
     used_fallback: bool
+    samtools_result: Optional[SamtoolsResponse] = None
 
 
 class WorkflowStartRequest(BaseModel):
@@ -340,6 +343,49 @@ class SnpEffResponse(BaseModel):
     index_path: Optional[str]
     command_preview: str
     parsed_records: list[SnpEffAnnotatedRecord]
+
+
+class SamtoolsRequest(BaseModel):
+    raw_path: str = Field(..., description="Absolute path to the input BAM, SAM, or CRAM file")
+    original_name: Optional[str] = Field(default=None, description="Optional original file name for display")
+    create_index_if_possible: bool = Field(
+        default=True,
+        description="Create an index for BAM or CRAM inputs when no index is already present.",
+    )
+    stats_limit: int = Field(default=12, description="Maximum number of samtools stats summary lines to keep")
+    idxstats_limit: int = Field(default=12, description="Maximum number of idxstats rows to keep")
+
+
+class SamtoolsStatsItem(BaseModel):
+    label: str
+    value: str
+
+
+class SamtoolsIdxstatsRow(BaseModel):
+    contig: str
+    length_bp: int
+    mapped: int
+    unmapped: int
+
+
+class SamtoolsResponse(BaseModel):
+    tool: str
+    input_path: str
+    display_name: str
+    file_kind: str
+    command_preview: str
+    quickcheck_ok: Optional[bool] = None
+    total_reads: Optional[int] = None
+    mapped_reads: Optional[int] = None
+    mapped_rate: Optional[float] = None
+    paired_reads: Optional[int] = None
+    properly_paired_reads: Optional[int] = None
+    properly_paired_rate: Optional[float] = None
+    singleton_reads: Optional[int] = None
+    index_path: Optional[str] = None
+    stats_highlights: list[SamtoolsStatsItem] = []
+    idxstats_rows: list[SamtoolsIdxstatsRow] = []
+    warnings: list[str] = []
 
 
 class LDBlockShowRequest(BaseModel):

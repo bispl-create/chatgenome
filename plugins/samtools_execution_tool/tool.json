@@ -1,0 +1,31 @@
+{
+  "name": "samtools_execution_tool",
+  "description": "Run local samtools on BAM, SAM, or CRAM inputs and return deterministic alignment QC summaries such as flagstat, stats, and idxstats.",
+  "task": "alignment-qc",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "local",
+  "routing": {
+    "trigger_keywords": ["samtools", "flagstat", "idxstats", "alignment qc", "bam stats"],
+    "execution_intents": ["run", "execute", "inspect", "qc", "실행", "돌려", "검사"],
+    "requires_source_vcf": false,
+    "question_argument": "none",
+    "result_slot": "samtools_result",
+    "execution_mode": "direct_endpoint"
+  },
+  "orchestration": {
+    "tool_kind": "execution",
+    "default_stage": "post-alignment",
+    "depends_on": [],
+    "consumes": ["alignment_file"],
+    "produces": ["samtools_result"],
+    "priority": 78,
+    "on_demand": true
+  },
+  "runtime": {
+    "host_compatible": ["cpu"],
+    "requires_gpu": false,
+    "allow_cpu_fallback": true,
+    "estimated_runtime_sec": 8
+  }
+}

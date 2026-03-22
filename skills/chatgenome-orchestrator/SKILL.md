@@ -43,6 +43,7 @@ For the current migration stage, the preferred initial order is:
 12. `filtering_view_tool`
 13. `symbolic_alt_tool`
 14. `ldblockshow_execution_tool` when the user explicitly requests locus-level LD heatmap visualization for a VCF region
+15. `samtools_execution_tool` when the user explicitly requests BAM/SAM/CRAM alignment QC, flagstat, idxstats, or post-alignment summary review
 
 Later tools should include:
 
@@ -55,6 +56,7 @@ Later tools should include:
 - Use `annotation_tool` to generate transcript-aware annotation state before downstream ranking.
 - Use `snpeff_execution_tool` when the user explicitly asks to run SnpEff on a local VCF and the required local Java runtime, jar, and genome database are available.
 - Use `ldblockshow_execution_tool` when the user explicitly asks for LD heatmap or block visualization over a region and provides or implies a concrete locus in `chr:start:end` format.
+- Use `samtools_execution_tool` when the user explicitly asks for post-alignment QC or BAM/SAM/CRAM inspection such as `flagstat`, `idxstats`, or `samtools stats`.
 - Use `cadd_lookup_tool` to enrich shortlisted annotated variants with local CADD scores when a build-matched local table is available.
 - Use `revel_lookup_tool` to enrich shortlisted missense variants with local REVEL scores when a matching local segment file is available.
 - Use `roh_analysis_tool` when ROH/recessive review is shown or requested.

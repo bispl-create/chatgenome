@@ -179,6 +179,26 @@ type AnalysisResponse = {
 
 type RawQcResponse = {
   analysis_id: string;
+  source_raw_path?: string | null;
+  samtools_result?: {
+    tool: string;
+    input_path: string;
+    display_name: string;
+    file_kind: string;
+    command_preview: string;
+    quickcheck_ok?: boolean | null;
+    total_reads?: number | null;
+    mapped_reads?: number | null;
+    mapped_rate?: number | null;
+    paired_reads?: number | null;
+    properly_paired_reads?: number | null;
+    properly_paired_rate?: number | null;
+    singleton_reads?: number | null;
+    index_path?: string | null;
+    stats_highlights: Array<{ label: string; value: string }>;
+    idxstats_rows: Array<{ contig: string; length_bp: number; mapped: number; unmapped: number }>;
+    warnings: string[];
+  } | null;
   draft_answer: string;
   facts: {
     file_name: string;
@@ -225,6 +245,7 @@ type StudioView =
   | "provenance"
   | "coverage"
   | "rawqc"
+  | "samtools"
   | "snpeff"
   | "ldblockshow"
   | "symbolic"
@@ -1048,6 +1069,18 @@ export default function Page() {
         throw new Error(await response.text());
       }
       const payload = await response.json();
+      if (payload.samtools_result) {
+        setRawQcAnalysis((current) =>
+          current
+            ? {
+                ...current,
+                samtools_result: payload.samtools_result,
+                used_tools: ["samtools_execution_tool"],
+              }
+            : current,
+        );
+        setActiveStudioView("samtools");
+      }
       setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
       setFollowUpAnswer(payload.answer);
       setStatus("Answer ready");
@@ -1378,7 +1411,12 @@ export default function Page() {
       .slice(0, 8);
   }, [analysis]);
   const studioCards: Array<{ id: StudioView; title: string; subtitle: string }> = rawQcAnalysis
-    ? [{ id: "rawqc", title: "FastQC Review", subtitle: "Raw sequencing module summary" }]
+    ? [
+        { id: "rawqc", title: "FastQC Review", subtitle: "Raw sequencing module summary" },
+        ...(rawQcAnalysis.samtools_result
+          ? [{ id: "samtools" as StudioView, title: "Samtools Review", subtitle: "Alignment QC summary" }]
+          : []),
+      ]
     : [
         { id: "provenance", title: "Workflow Setup", subtitle: "Tools, scope, and run policy" },
         { id: "qc", title: "QC Summary", subtitle: "PASS, Ti/Tv, GT quality" },
@@ -1811,6 +1849,105 @@ export default function Page() {
                     </a>
                   ) : null}
                 </div>
+              </div>
+            </section>
+          ) : null}
+          {rawQcAnalysis && activeStudioView === "samtools" ? (
+            <section className="notebookPanel studioCanvasPanel">
+              <div className="notebookHeader">
+                <h2>Samtools Review</h2>
+              </div>
+              <div className="studioCanvasBody">
+                {rawQcAnalysis.samtools_result ? (
+                  <>
+                    <div className="resultMetricGrid">
+                      <MetricTile label="File kind" value={rawQcAnalysis.samtools_result.file_kind} tone="good" />
+                      <MetricTile
+                        label="Total reads"
+                        value={
+                          rawQcAnalysis.samtools_result.total_reads != null
+                            ? String(rawQcAnalysis.samtools_result.total_reads)
+                            : "n/a"
+                        }
+                        tone="neutral"
+                      />
+                      <MetricTile
+                        label="Mapped"
+                        value={
+                          rawQcAnalysis.samtools_result.mapped_reads != null
+                            ? `${rawQcAnalysis.samtools_result.mapped_reads}${
+                                rawQcAnalysis.samtools_result.mapped_rate != null
+                                  ? ` (${rawQcAnalysis.samtools_result.mapped_rate.toFixed(2)}%)`
+                                  : ""
+                              }`
+                            : "n/a"
+                        }
+                        tone="good"
+                      />
+                      <MetricTile
+                        label="Properly paired"
+                        value={
+                          rawQcAnalysis.samtools_result.properly_paired_reads != null
+                            ? `${rawQcAnalysis.samtools_result.properly_paired_reads}${
+                                rawQcAnalysis.samtools_result.properly_paired_rate != null
+                                  ? ` (${rawQcAnalysis.samtools_result.properly_paired_rate.toFixed(2)}%)`
+                                  : ""
+                              }`
+                            : "n/a"
+                        }
+                        tone="neutral"
+                      />
+                      <MetricTile
+                        label="Quickcheck"
+                        value={rawQcAnalysis.samtools_result.quickcheck_ok ? "PASS" : "Issue detected"}
+                        tone={rawQcAnalysis.samtools_result.quickcheck_ok ? "good" : "warn"}
+                      />
+                      <MetricTile
+                        label="Index"
+                        value={rawQcAnalysis.samtools_result.index_path ? "Created / available" : "n/a"}
+                        tone="neutral"
+                      />
+                    </div>
+                    <div className="resultSectionSplit">
+                      <article className="miniCard">
+                        <h3>samtools stats highlights</h3>
+                        <div className="resultList">
+                          {rawQcAnalysis.samtools_result.stats_highlights.map((item) => (
+                            <article key={item.label} className="resultListItem resultListStatic">
+                              <strong>{item.label}</strong>
+                              <span>{item.value}</span>
+                            </article>
+                          ))}
+                        </div>
+                      </article>
+                      <article className="miniCard">
+                        <h3>idxstats preview</h3>
+                        <div className="resultList">
+                          {rawQcAnalysis.samtools_result.idxstats_rows.map((row) => (
+                            <article key={`${row.contig}-${row.length_bp}`} className="resultListItem resultListStatic">
+                              <strong>{row.contig}</strong>
+                              <span>
+                                mapped {row.mapped} | unmapped {row.unmapped} | length {row.length_bp}
+                              </span>
+                            </article>
+                          ))}
+                        </div>
+                      </article>
+                    </div>
+                    {rawQcAnalysis.samtools_result.warnings.length ? (
+                      <div className="resultList">
+                        {rawQcAnalysis.samtools_result.warnings.map((warning, index) => (
+                          <article key={`${warning}-${index}`} className="miniCard">
+                            <h3>Warning</h3>
+                            <p>{warning}</p>
+                          </article>
+                        ))}
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="emptyState">No samtools result is available for the current raw-QC session.</p>
+                )}
               </div>
             </section>
           ) : null}

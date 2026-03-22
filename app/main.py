@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -33,6 +32,8 @@ from app.models import (
     RPlotResponse,
     SnpEffRequest,
     SnpEffResponse,
+    SamtoolsRequest,
+    SamtoolsResponse,
     SymbolicAltSummary,
     ToolInfo,
     VariantAnnotation,
@@ -47,6 +48,7 @@ from app.services.fastqc import FASTQC_OUTPUT_DIR
 from app.services.filtering import run_filter
 from app.services.jobs import create_job, get_job, run_job
 from app.services.ldblockshow import LDBLOCKSHOW_OUTPUT_DIR, run_ldblockshow
+from app.services.samtools import run_samtools
 from app.services.recommendation import build_recommendations
 from app.services.references import build_reference_bundle
 from app.services.r_vcf_plots import RPLOT_OUTPUT_DIR, run_cmplot_association, run_r_vcf_plots
@@ -92,6 +94,7 @@ app.add_middleware(
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 ANALYSIS_UPLOAD_DIR = ROOT_DIR / "uploads" / "analysis"
+RAW_QC_UPLOAD_DIR = ROOT_DIR / "uploads" / "raw_qc"
 PLUGINS_DIR = ROOT_DIR / "plugins"
 
 
@@ -496,6 +499,16 @@ def run_snpeff_annotation(request: SnpEffRequest) -> SnpEffResponse:
         raise HTTPException(status_code=400, detail=f"SnpEff failed: {exc}") from exc
 
 
+@app.post("/api/v1/samtools/run", response_model=SamtoolsResponse)
+def run_samtools_alignment_qc(request: SamtoolsRequest) -> SamtoolsResponse:
+    try:
+        return run_samtools(request)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"samtools failed: {exc}") from exc
+
+
 @app.post("/api/v1/ldblockshow/run", response_model=LDBlockShowResponse)
 def run_ldblockshow_plot(request: LDBlockShowRequest) -> LDBlockShowResponse:
     try:
@@ -562,17 +575,11 @@ async def analyze_raw_qc_upload(file: UploadFile = File(...)) -> RawQcResponse:
         )
 
     suffixes = "".join(Path(filename).suffixes) or Path(filename).suffix or ".dat"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffixes) as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
-
-    try:
-        return _analyze_raw_qc(tmp_path, filename)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    RAW_QC_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in Path(filename).stem)
+    durable_path = RAW_QC_UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}_{safe_stem}{suffixes}"
+    durable_path.write_bytes(await file.read())
+    return _analyze_raw_qc(str(durable_path), filename)
 
 
 @app.get("/api/v1/raw-qc/report")

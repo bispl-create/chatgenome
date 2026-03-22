@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.request
 from pathlib import Path
 
 from app.models import AnalysisChatRequest, AnalysisChatResponse, RawQcChatRequest, RawQcChatResponse
-from app.models import LDBlockShowRequest, LDBlockShowResponse, SnpEffRequest
+from app.models import LDBlockShowRequest, LDBlockShowResponse, SamtoolsRequest, SnpEffRequest
 from app.services.ldblockshow import run_ldblockshow
+from app.services.samtools import run_samtools
 from app.services.snpeff import run_snpeff
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -634,6 +636,67 @@ def _fallback_raw_qc_answer(payload: RawQcChatRequest) -> RawQcChatResponse:
 
 
 def answer_raw_qc_chat(payload: RawQcChatRequest) -> RawQcChatResponse:
+    lowered = payload.question.lower()
+    if "samtools" in lowered:
+        alignment_kind = (payload.analysis.facts.file_kind or "").upper()
+        if alignment_kind not in {"BAM", "SAM", "CRAM", "ALIGNMENT"}:
+            return RawQcChatResponse(
+                answer=(
+                    "samtools is intended for alignment files such as BAM, SAM, or CRAM. "
+                    f"The current uploaded source is `{payload.analysis.facts.file_name}` ({payload.analysis.facts.file_kind})."
+                ),
+                citations=[],
+                used_fallback=False,
+            )
+        raw_path = payload.analysis.source_raw_path
+        if not raw_path:
+            return RawQcChatResponse(
+                answer=(
+                    "samtools could not be run because this raw-QC session does not retain a durable source path yet. "
+                    "Please re-upload the BAM/SAM/CRAM file and try again."
+                ),
+                citations=[],
+                used_fallback=False,
+            )
+        try:
+            result = run_samtools(
+                SamtoolsRequest(
+                    raw_path=raw_path,
+                    original_name=payload.analysis.facts.file_name,
+                )
+            )
+            idx_lines = [
+                f"- {item.contig}: mapped {item.mapped}, unmapped {item.unmapped}, length {item.length_bp}"
+                for item in result.idxstats_rows[:5]
+            ]
+            answer = (
+                f"samtools reviewed `{result.display_name}` ({result.file_kind}).\n\n"
+                f"- Quickcheck: {'PASS' if result.quickcheck_ok else 'issue detected'}\n"
+                f"- Total reads: {result.total_reads if result.total_reads is not None else 'unknown'}\n"
+                f"- Mapped reads: {result.mapped_reads if result.mapped_reads is not None else 'unknown'}"
+                f"{f' ({result.mapped_rate:.2f}%)' if result.mapped_rate is not None else ''}\n"
+                f"- Properly paired reads: {result.properly_paired_reads if result.properly_paired_reads is not None else 'unknown'}"
+                f"{f' ({result.properly_paired_rate:.2f}%)' if result.properly_paired_rate is not None else ''}\n"
+                f"- Singleton reads: {result.singleton_reads if result.singleton_reads is not None else 'unknown'}\n"
+                f"- Index path: {result.index_path or 'none'}\n\n"
+                "Top idxstats rows:\n"
+                f"{chr(10).join(idx_lines) if idx_lines else '- idxstats rows are not available for this input.'}"
+            )
+            if result.warnings:
+                answer += "\n\nWarnings:\n" + "\n".join(f"- {warning}" for warning in result.warnings[:5])
+            return RawQcChatResponse(
+                answer=answer,
+                citations=[],
+                used_fallback=False,
+                samtools_result=result,
+            )
+        except Exception as exc:
+            return RawQcChatResponse(
+                answer=f"samtools 실행 중 오류가 발생했습니다: {exc}",
+                citations=[],
+                used_fallback=False,
+            )
+
     api_key = os.getenv("OPENAI_API_KEY")
     model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
     if not api_key:
