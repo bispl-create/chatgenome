@@ -331,7 +331,71 @@ type SummaryStatsChatResponse = {
   answer: string;
   citations: string[];
   used_fallback: boolean;
+  requested_view?: StudioView | null;
+  analysis?: SummaryStatsResponse | null;
 };
+
+type AnalysisChatResponse = {
+  answer: string;
+  citations: string[];
+  used_fallback: boolean;
+  used_tools?: string[];
+  requested_view?: StudioView | null;
+  analysis?: AnalysisResponse | null;
+  plink_result?: AnalysisResponse["plink_result"];
+  liftover_result?: AnalysisResponse["liftover_result"];
+  ldblockshow_result?: AnalysisResponse["ldblockshow_result"];
+};
+
+type RawQcChatResponse = {
+  answer: string;
+  citations: string[];
+  used_fallback: boolean;
+  requested_view?: StudioView | null;
+  analysis?: RawQcResponse | null;
+  samtools_result?: RawQcResponse["samtools_result"];
+};
+
+type WorkflowManifest = {
+  name: string;
+  description: string;
+  source_type: "vcf" | "raw_qc" | "summary_stats" | string;
+  steps?: string[];
+  default_view?: string | null;
+};
+
+type SourceReadyResponse = {
+  source_type: "vcf" | "raw_qc" | "summary_stats";
+  file_name: string;
+  source_path: string;
+  file_kind?: string | null;
+};
+
+const DEFAULT_WORKFLOW_REGISTRY: WorkflowManifest[] = [
+  {
+    name: "representative_vcf_review",
+    description: "Run the default representative VCF interpretation workflow on the active VCF source.",
+    source_type: "vcf",
+    default_view: "candidates",
+  },
+  {
+    name: "raw_qc_review",
+    description: "Run the default raw sequencing QC workflow on the active FASTQ/BAM/SAM source.",
+    source_type: "raw_qc",
+    default_view: "rawqc",
+  },
+  {
+    name: "summary_stats_review",
+    description: "Run the default summary statistics intake and review workflow on the active summary-stats source.",
+    source_type: "summary_stats",
+    default_view: "sumstats",
+  },
+];
+
+const DEFAULT_LIFTOVER_CHAIN =
+  "/Users/jongcye/Documents/Codex/workspace/bioinformatics_vcf_evidence_mvp/references/liftover/chains/hg19ToHg38.over.chain.gz";
+const DEFAULT_LIFTOVER_TARGET_FASTA =
+  "/Users/jongcye/Documents/Codex/workspace/bioinformatics_vcf_evidence_mvp/references/liftover/GRCh38/hg38.fa";
 
 type ChatMessage = {
   role: "assistant" | "user";
@@ -809,6 +873,13 @@ export default function Page() {
   const [summaryStatsHasMore, setSummaryStatsHasMore] = useState(false);
   const [summaryStatsRowsLoading, setSummaryStatsRowsLoading] = useState(false);
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [attachedSourceType, setAttachedSourceType] = useState<"vcf" | "raw_qc" | "summary_stats" | null>(null);
+  const [activeSource, setActiveSource] = useState<SourceReadyResponse | null>(null);
+  const [directLiftoverResult, setDirectLiftoverResult] = useState<AnalysisResponse["liftover_result"] | null>(null);
+  const [directSamtoolsResult, setDirectSamtoolsResult] = useState<RawQcResponse["samtools_result"] | null>(null);
+  const [directPlinkResult, setDirectPlinkResult] = useState<AnalysisResponse["plink_result"] | null>(null);
+  const [directSnpeffResult, setDirectSnpeffResult] = useState<AnalysisResponse["snpeff_result"] | null>(null);
+  const [directLdblockshowResult, setDirectLdblockshowResult] = useState<AnalysisResponse["ldblockshow_result"] | null>(null);
   const [annotationScope, setAnnotationScope] = useState<"representative" | "all">("representative");
   const [annotationLimit, setAnnotationLimit] = useState("200");
   const [status, setStatus] = useState("Waiting for a genomics source");
@@ -829,6 +900,8 @@ export default function Page() {
     outputPrefix: "",
   });
   const [toolRegistryOpen, setToolRegistryOpen] = useState(false);
+  const [skillRegistryOpen, setSkillRegistryOpen] = useState(false);
+  const [workflowRegistry, setWorkflowRegistry] = useState<WorkflowManifest[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const studioCanvasRef = useRef<HTMLElement | null>(null);
   const chatStreamRef = useRef<HTMLDivElement | null>(null);
@@ -841,6 +914,32 @@ export default function Page() {
         : summaryStatsAnalysis?.tool_registry?.length
           ? summaryStatsAnalysis.tool_registry
         : toolRegistry;
+  const availableWorkflows = useMemo(() => {
+    const registry = workflowRegistry.length ? workflowRegistry : DEFAULT_WORKFLOW_REGISTRY;
+    const sourceType =
+      analysis ? "vcf" : rawQcAnalysis ? "raw_qc" : summaryStatsAnalysis ? "summary_stats" : attachedSourceType;
+    return sourceType ? registry.filter((item) => item.source_type === sourceType) : registry;
+  }, [workflowRegistry, analysis, rawQcAnalysis, summaryStatsAnalysis, attachedSourceType]);
+
+  function displayToolAlias(toolName: string) {
+    const normalized = toolName.toLowerCase();
+    if (normalized.includes("liftover")) {
+      return "@liftover";
+    }
+    if (normalized.includes("samtools")) {
+      return "@samtools";
+    }
+    if (normalized.includes("plink")) {
+      return "@plink";
+    }
+    if (normalized.includes("snpeff")) {
+      return "@snpeff";
+    }
+    if (normalized.includes("ldblockshow")) {
+      return "@ldblockshow";
+    }
+    return `@${normalized.replace(/_execution_tool$|_tool$|_vcf_tool$/g, "").replace(/^gatk_/, "").replace(/_/g, "")}`;
+  }
   const plinkCommandPreview = useMemo(() => {
     const inputPath = analysis?.source_vcf_path || "<source.vcf.gz>";
     const outputPrefix = (plinkConfig.outputPrefix || `${analysis?.analysis_id ?? "analysis"}-plink`).trim();
@@ -921,7 +1020,23 @@ export default function Page() {
       }
     }
 
+    async function loadWorkflowRegistry() {
+      try {
+        const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/workflows`);
+        if (!response.ok) {
+          return;
+        }
+        const payload = (await response.json()) as WorkflowManifest[];
+        if (!cancelled) {
+          setWorkflowRegistry(payload);
+        }
+      } catch {
+        // best-effort refresh only
+      }
+    }
+
     void loadToolRegistry();
+    void loadWorkflowRegistry();
     const retryTimer = window.setInterval(() => {
       if (!cancelled && (toolRegistry?.length ?? 0) === 0) {
         void loadToolRegistry();
@@ -967,41 +1082,308 @@ export default function Page() {
     fileInputRef.current?.click();
   }
 
-  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+  function workflowHelpText(sourceType: "vcf" | "raw_qc" | "summary_stats" | null) {
+    const registry = workflowRegistry.length ? workflowRegistry : DEFAULT_WORKFLOW_REGISTRY;
+    const filtered = registry.filter((item) => !sourceType || item.source_type === sourceType);
+    if (filtered.length === 0) {
+      return "No workflow registry entries are available for the current source.";
+    }
+    return [
+      "**Workflow registry**",
+      "",
+      ...filtered.map((item) => `- \`@skill ${item.name}\`: ${item.description}`),
+    ].join("\n");
+  }
+
+  function workflowDetailHelpText(workflowName: string) {
+    const registry = workflowRegistry.length ? workflowRegistry : DEFAULT_WORKFLOW_REGISTRY;
+    const workflow = registry.find((item) => item.name === workflowName);
+    if (!workflow) {
+      return `\`@skill ${workflowName}\` is not a registered workflow.`;
+    }
+    const availableTools = (toolRegistry ?? []).reduce<Record<string, string>>((acc, item) => {
+      acc[item.name] = item.description;
+      return acc;
+    }, {});
+    const lines = [
+      `**${workflow.name}**`,
+      "",
+      workflow.description,
+    ];
+    if (workflow.steps?.length) {
+      lines.push("", "Steps");
+      workflow.steps.forEach((step) => {
+        lines.push(`- \`${step}\`${availableTools[step] ? `: ${availableTools[step]}` : ""}`);
+      });
+    }
+    lines.push("", "Examples", `- \`@skill ${workflow.name}\``, `- \`@skill ${workflow.name} help\``);
+    return lines.join("\n");
+  }
+
+  async function uploadActiveSource(file: File): Promise<SourceReadyResponse> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/source/upload`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return (await response.json()) as SourceReadyResponse;
+  }
+
+  async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
     if (!file) {
       return;
     }
+    const guessedSourceType =
+      isRawQcFileName(file.name)
+        ? "raw_qc"
+        : isSummaryStatsFileName(file.name) && !isVcfFileName(file.name)
+          ? "summary_stats"
+          : "vcf";
     setAttachedFile(file);
+    setAttachedSourceType(guessedSourceType);
+    setActiveSource(null);
     setAnalysis(null);
     setRawQcAnalysis(null);
     setSummaryStatsAnalysis(null);
+    setDirectLiftoverResult(null);
+    setDirectSamtoolsResult(null);
+    setDirectPlinkResult(null);
+    setDirectSnpeffResult(null);
+    setDirectLdblockshowResult(null);
     setFollowUpAnswer(null);
     setAnalysisQa([]);
     setActiveStudioView(null);
     setSelectedAnnotationIndex(0);
     setAnnotationSearch("");
     setError(null);
-    if (isRawQcFileName(file.name)) {
-      setStatus("Running FastQC...");
-      void handleStartRawQc(file);
-    } else if (isSummaryStatsFileName(file.name) && !isVcfFileName(file.name)) {
-      setStatus("Loading summary statistics...");
-      void handleStartSummaryStats(file);
+    try {
+      const source = await uploadActiveSource(file);
+      setActiveSource(source);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setError(message);
+      setStatus("Source upload failed");
+      addMessage({
+        role: "assistant",
+        content: `소스 업로드 중 오류가 발생했습니다: ${message}`,
+      });
+      event.target.value = "";
+      return;
+    }
+    if (guessedSourceType === "raw_qc") {
+      setStatus("Raw sequencing source ready");
+      addMessage({
+        role: "assistant",
+        content: `Raw sequencing source \`${file.name}\` is loaded. Run \`@skill raw_qc_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
+      });
+    } else if (guessedSourceType === "summary_stats") {
+      setStatus("Summary statistics source ready");
+      addMessage({
+        role: "assistant",
+        content: `Summary statistics source \`${file.name}\` is loaded. Run \`@skill summary_stats_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
+      });
     } else {
-      setStatus("Preparing analysis...");
-      void handleStartAnalysis("representative", annotationLimit, file);
+      setStatus("VCF source ready");
+      addMessage({
+        role: "assistant",
+        content: `VCF source \`${file.name}\` is loaded. Run \`@skill representative_vcf_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
+      });
     }
     event.target.value = "";
   }
 
-  async function handleStartRawQc(file: File) {
-    setError(null);
+  function parseInlineOptions(text: string) {
+    const options: Record<string, string> = {};
+    for (const token of text.split(/\s+/).filter(Boolean)) {
+      const [key, ...rest] = token.split("=");
+      if (!key || rest.length === 0) {
+        continue;
+      }
+      options[key.trim().toLowerCase()] = rest.join("=").trim();
+    }
+    return options;
+  }
+
+  async function runPreAnalysisTool(alias: string, remainder: string) {
+    if (!activeSource) {
+      addMessage({
+        role: "assistant",
+        content: "먼저 active source가 준비되어야 합니다. 파일을 다시 업로드해 주세요.",
+      });
+      return;
+    }
+    const options = parseInlineOptions(remainder);
+
+    if (alias === "liftover" && activeSource.source_type === "vcf") {
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/liftover/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vcf_path: activeSource.source_path,
+          chain_file: DEFAULT_LIFTOVER_CHAIN,
+          target_reference_fasta: DEFAULT_LIFTOVER_TARGET_FASTA,
+          target_build: options.target || "hg38",
+          source_build: options.source_build || undefined,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = (await response.json()) as AnalysisResponse["liftover_result"];
+      setDirectLiftoverResult(payload ?? null);
+      setActiveStudioView("liftover");
+      addMessage({
+        role: "assistant",
+        content:
+          `GATK LiftoverVcf was run for the current VCF.\n\n` +
+          `- Source build: ${payload?.source_build || "unknown"}\n` +
+          `- Target build: ${payload?.target_build || "unknown"}\n` +
+          `- Lifted records: ${payload?.lifted_record_count ?? "unknown"}\n` +
+          `- Rejected records: ${payload?.rejected_record_count ?? "unknown"}`,
+      });
+      return;
+    }
+
+    if (alias === "samtools" && activeSource.source_type === "raw_qc") {
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/samtools/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          raw_path: activeSource.source_path,
+          original_name: activeSource.file_name,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = (await response.json()) as RawQcResponse["samtools_result"];
+      setDirectSamtoolsResult(payload ?? null);
+      setActiveStudioView("samtools");
+      addMessage({
+        role: "assistant",
+        content:
+          `samtools reviewed the active source \`${activeSource.file_name}\`.\n\n` +
+          `- Quickcheck: ${payload?.quickcheck_ok ? "PASS" : "issue detected"}\n` +
+          `- Total reads: ${payload?.total_reads ?? "unknown"}\n` +
+          `- Mapped reads: ${payload?.mapped_reads ?? "unknown"}${
+            payload?.mapped_rate != null ? ` (${payload.mapped_rate.toFixed(2)}%)` : ""
+          }`,
+      });
+      return;
+    }
+
+    if (alias === "plink" && activeSource.source_type === "vcf") {
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/plink/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vcf_path: activeSource.source_path,
+          output_prefix: `${activeSource.file_name}-plink`,
+          allow_extra_chr: true,
+          freq_limit: 12,
+          missing_limit: 12,
+          hardy_limit: 12,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = (await response.json()) as AnalysisResponse["plink_result"];
+      setDirectPlinkResult(payload ?? null);
+      setActiveStudioView("plink");
+      addMessage({
+        role: "assistant",
+        content:
+          `PLINK was run for the current VCF.\n\n` +
+          `- Variants: ${payload?.variant_count ?? "unknown"}\n` +
+          `- Samples: ${payload?.sample_count ?? "unknown"}\n` +
+          `- Outputs: afreq ${payload?.freq_rows?.length ?? 0}, missing ${payload?.missing_rows?.length ?? 0}, hardy ${payload?.hardy_rows?.length ?? 0}`,
+      });
+      return;
+    }
+
+    if (alias === "snpeff" && activeSource.source_type === "vcf") {
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/snpeff/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vcf_path: activeSource.source_path,
+          genome: options.genome || "GRCh37.75",
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = await response.json();
+      setDirectSnpeffResult(payload ?? null);
+      setActiveStudioView("snpeff");
+      addMessage({
+        role: "assistant",
+        content:
+          `SnpEff was run for the current VCF.\n\n` +
+          `- Genome: ${payload?.genome || "unknown"}\n` +
+          `- Parsed preview records: ${payload?.parsed_records?.length ?? 0}\n` +
+          `- Output: ${payload?.output_path || "n/a"}`,
+      });
+      return;
+    }
+
+    if (alias === "ldblockshow" && activeSource.source_type === "vcf") {
+      if (!options.region) {
+        addMessage({
+          role: "assistant",
+          content: "LDBlockShow requires a region. Try `@ldblockshow help` or `@ldblockshow region=chr1:1000-5000`.",
+        });
+        return;
+      }
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/ldblockshow/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vcf_path: activeSource.source_path,
+          region: options.region,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = await response.json();
+      setDirectLdblockshowResult(payload ?? null);
+      setActiveStudioView("ldblockshow");
+      addMessage({
+        role: "assistant",
+        content:
+          `LDBlockShow was run for the current VCF.\n\n` +
+          `- Region: ${payload?.region || options.region}\n` +
+          `- PNG: ${payload?.png_path || "n/a"}\n` +
+          `- SVG: ${payload?.svg_path || "n/a"}`,
+      });
+      return;
+    }
+
     addMessage({
       role: "assistant",
-      content: "FastQC로 raw sequencing QC를 실행하고 있습니다.",
-      kind: "status",
+      content:
+        `\`@${alias}\` is not compatible with the current active source.` +
+        (activeSource ? ` Current source type: \`${activeSource.source_type}\`.` : ""),
     });
+  }
+
+  async function handleStartRawQc(file: File, options?: { silent?: boolean }): Promise<RawQcResponse | null> {
+    const silent = options?.silent ?? false;
+    setError(null);
+    if (!silent) {
+      addMessage({
+        role: "assistant",
+        content: "FastQC로 raw sequencing QC를 실행하고 있습니다.",
+        kind: "status",
+      });
+    }
 
     try {
       const formData = new FormData();
@@ -1021,6 +1403,7 @@ export default function Page() {
       setActiveStudioView("rawqc");
       setStatus("Raw QC ready");
       setComposerText("");
+      return payload;
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
       setError(message);
@@ -1029,16 +1412,23 @@ export default function Page() {
         role: "assistant",
         content: `FastQC 실행 중 오류가 발생했습니다: ${message}`,
       });
+      return null;
     }
   }
 
-  async function handleStartSummaryStats(file: File) {
+  async function handleStartSummaryStats(
+    file: File,
+    options?: { silent?: boolean },
+  ): Promise<SummaryStatsResponse | null> {
+    const silent = options?.silent ?? false;
     setError(null);
-    addMessage({
-      role: "assistant",
-      content: "Summary statistics 파일을 읽고 컬럼과 기본 QC를 확인하고 있습니다.",
-      kind: "status",
-    });
+    if (!silent) {
+      addMessage({
+        role: "assistant",
+        content: "Summary statistics 파일을 읽고 컬럼과 기본 QC를 확인하고 있습니다.",
+        kind: "status",
+      });
+    }
 
     try {
       const formData = new FormData();
@@ -1061,6 +1451,7 @@ export default function Page() {
       setActiveStudioView("sumstats");
       setStatus("Summary stats ready");
       setComposerText("");
+      return payload;
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
       setError(message);
@@ -1069,6 +1460,7 @@ export default function Page() {
         role: "assistant",
         content: `Summary statistics intake 중 오류가 발생했습니다: ${message}`,
       });
+      return null;
     }
   }
 
@@ -1076,11 +1468,13 @@ export default function Page() {
     parsedScope?: "representative" | "all",
     parsedLimit?: string,
     fileOverride?: File | null,
-  ) {
+    options?: { silent?: boolean },
+  ): Promise<AnalysisResponse | null> {
     const inputFile = fileOverride ?? attachedFile;
+    const silent = options?.silent ?? false;
     if (!inputFile) {
       setError("먼저 + 버튼으로 VCF 파일을 첨부해 주세요.");
-      return;
+      return null;
     }
 
     const effectiveScope = parsedScope ?? annotationScope;
@@ -1103,25 +1497,27 @@ export default function Page() {
         }
       })();
     }
-    addMessage({
-      role: "assistant",
-      content: "pysam으로 VCF header, sample, record count, 기본 QC를 읽고 있습니다.",
-      kind: "status",
-    });
-    await sleep(350);
-    addMessage({
-      role: "assistant",
-      content:
-        "현재 run은 요약과 주석 중심이라 bcftools/GATK hard filtering는 적용하지 않고, 원본 VCF를 그대로 해석합니다. 필터 조건이 필요해지면 그 단계에서 bcftools filter 또는 GATK VariantFiltration을 호출하겠습니다.",
-      kind: "status",
-    });
-    await sleep(350);
-    addMessage({
-      role: "assistant",
-      content:
-        "변이 주석은 Ensembl VEP REST로 consequence, transcript, HGVS, protein 정보를 붙이고, ClinVar/refsnp와 gnomAD를 기준으로 clinical significance와 allele frequency를 확인하고 있습니다.",
-      kind: "status",
-    });
+    if (!silent) {
+      addMessage({
+        role: "assistant",
+        content: "pysam으로 VCF header, sample, record count, 기본 QC를 읽고 있습니다.",
+        kind: "status",
+      });
+      await sleep(350);
+      addMessage({
+        role: "assistant",
+        content:
+          "현재 run은 요약과 주석 중심이라 bcftools/GATK hard filtering는 적용하지 않고, 원본 VCF를 그대로 해석합니다. 필터 조건이 필요해지면 그 단계에서 bcftools filter 또는 GATK VariantFiltration을 호출하겠습니다.",
+        kind: "status",
+      });
+      await sleep(350);
+      addMessage({
+        role: "assistant",
+        content:
+          "변이 주석은 Ensembl VEP REST로 consequence, transcript, HGVS, protein 정보를 붙이고, ClinVar/refsnp와 gnomAD를 기준으로 clinical significance와 allele frequency를 확인하고 있습니다.",
+        kind: "status",
+      });
+    }
 
     try {
       const formData = new FormData();
@@ -1148,6 +1544,7 @@ export default function Page() {
       setSelectedAnnotationIndex(0);
       setComposerText("");
       setStatus("Analysis ready");
+      return payload;
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
       setError(message);
@@ -1156,7 +1553,19 @@ export default function Page() {
         role: "assistant",
         content: `분석 중 오류가 발생했습니다: ${message}`,
       });
+      return null;
     }
+  }
+
+  async function fetchToolHelpText(alias: string) {
+    const response = await fetch(
+      `${apiBase.replace(/\/$/, "")}/api/v1/tools/help?alias=${encodeURIComponent(alias)}`,
+    );
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    const payload = (await response.json()) as { help?: string };
+    return payload.help ?? `\`@${alias}\` help is not available right now.`;
   }
 
   async function handleComposerSubmit() {
@@ -1172,6 +1581,98 @@ export default function Page() {
         content: "먼저 + 버튼으로 VCF 파일을 첨부해 주세요.",
       });
       setComposerText("");
+      return;
+    }
+
+    if (!analysis && !rawQcAnalysis && !summaryStatsAnalysis) {
+      const skillMatch = text.match(/^@skill(?:\s+(.*))?$/i);
+      if (skillMatch) {
+        addMessage({ role: "user", content: text });
+        setComposerText("");
+        const remainder = (skillMatch[1] ?? "").trim();
+        if (!remainder || /^help$/i.test(remainder)) {
+          addMessage({
+            role: "assistant",
+            content: workflowHelpText(attachedSourceType),
+          });
+          return;
+        }
+
+        const workflowName = remainder.split(/\s+/)[0];
+        if (/\shelp$/i.test(remainder)) {
+          addMessage({
+            role: "assistant",
+            content: workflowDetailHelpText(workflowName),
+          });
+          return;
+        }
+        if (workflowName === "representative_vcf_review" && attachedSourceType === "vcf") {
+          await handleStartAnalysis("representative", annotationLimit, attachedFile);
+          return;
+        }
+        if (workflowName === "raw_qc_review" && attachedSourceType === "raw_qc") {
+          await handleStartRawQc(attachedFile);
+          return;
+        }
+        if (workflowName === "summary_stats_review" && attachedSourceType === "summary_stats") {
+          await handleStartSummaryStats(attachedFile);
+          return;
+        }
+
+        addMessage({
+          role: "assistant",
+          content:
+            `\`@skill ${workflowName}\` is not compatible with the current active source.` +
+            (attachedSourceType ? ` Current source type: \`${attachedSourceType}\`.` : ""),
+        });
+        return;
+      }
+
+      const atToolMatch = text.match(/^@([A-Za-z0-9_-]+)(?:\s+(.*))?$/);
+      if (atToolMatch && atToolMatch[1].toLowerCase() !== "skill") {
+        const alias = atToolMatch[1].trim();
+        const remainder = (atToolMatch[2] ?? "").trim();
+        const isHelp = /^(help|--help|-h)(\s+.*)?$/i.test(remainder);
+        setComposerText("");
+
+        if (isHelp) {
+          addMessage({ role: "user", content: text });
+          try {
+            const helpText = await fetchToolHelpText(alias);
+            addMessage({
+              role: "assistant",
+              content: helpText,
+            });
+          } catch (caught) {
+            const message = caught instanceof Error ? caught.message : String(caught);
+            addMessage({
+              role: "assistant",
+              content: `\`@${alias} help\` 조회 중 오류가 발생했습니다: ${message}`,
+            });
+          }
+          return;
+        }
+
+        addMessage({ role: "user", content: text });
+        try {
+          await runPreAnalysisTool(alias.toLowerCase(), remainder);
+        } catch (caught) {
+          const message = caught instanceof Error ? caught.message : String(caught);
+          addMessage({
+            role: "assistant",
+            content: `\`@${alias}\` 실행 중 오류가 발생했습니다: ${message}`,
+          });
+        }
+        return;
+      }
+
+      addMessage({ role: "user", content: text });
+      setComposerText("");
+      addMessage({
+        role: "assistant",
+        content:
+          "A source is loaded, but no workflow is running yet. Use `@skill help` to see available workflows, then run one such as `@skill representative_vcf_review`.",
+      });
       return;
     }
 
@@ -1201,9 +1702,10 @@ export default function Page() {
     setComposerText("");
   }
 
-  async function handleAskAnalysisQuestion(questionText?: string) {
+  async function handleAskAnalysisQuestion(questionText?: string, analysisOverride?: AnalysisResponse | null) {
     const text = questionText?.trim() ?? "";
-    if (!text || !analysis) {
+    const activeAnalysis = analysisOverride ?? analysis;
+    if (!text || !activeAnalysis) {
       return;
     }
 
@@ -1216,7 +1718,7 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question: text,
-          analysis,
+          analysis: activeAnalysis,
           history: analysisQa.map((turn) => ({ role: turn.role, content: turn.content })),
           studio_context: studioContext,
         }),
@@ -1224,10 +1726,15 @@ export default function Page() {
       if (!response.ok) {
         throw new Error(await response.text());
       }
-      const payload = await response.json();
+      const payload: AnalysisChatResponse = await response.json();
+      if (payload.analysis) {
+        setAnalysis(payload.analysis);
+      }
       setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
       if (payload.requested_view === "plink") {
         setActiveStudioView("plink");
+      } else if (payload.requested_view) {
+        setActiveStudioView(payload.requested_view);
       }
       if (payload.plink_result) {
         setAnalysis((current) =>
@@ -1278,7 +1785,8 @@ export default function Page() {
   }
 
   async function handleRunPlink() {
-    if (!analysis?.source_vcf_path) {
+    const sourceVcfPath = analysis?.source_vcf_path ?? (activeSource?.source_type === "vcf" ? activeSource.source_path : null);
+    if (!sourceVcfPath) {
       setError("현재 분석에는 실행 가능한 source VCF path가 없습니다.");
       return;
     }
@@ -1291,8 +1799,8 @@ export default function Page() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          vcf_path: analysis.source_vcf_path,
-          output_prefix: (plinkConfig.outputPrefix || `${analysis.analysis_id}-plink`).trim(),
+          vcf_path: sourceVcfPath,
+          output_prefix: (plinkConfig.outputPrefix || `${analysis?.analysis_id ?? "active-source"}-plink`).trim(),
           allow_extra_chr: plinkConfig.allowExtraChr,
           freq_limit: plinkConfig.runFreq ? 12 : 0,
           missing_limit: plinkConfig.runMissing ? 12 : 0,
@@ -1365,9 +1873,10 @@ export default function Page() {
     }
   }
 
-  async function handleAskRawQcQuestion(questionText?: string) {
+  async function handleAskRawQcQuestion(questionText?: string, analysisOverride?: RawQcResponse | null) {
     const text = questionText?.trim() ?? "";
-    if (!text || !rawQcAnalysis) {
+    const activeAnalysis = analysisOverride ?? rawQcAnalysis;
+    if (!text || !activeAnalysis) {
       return;
     }
 
@@ -1380,14 +1889,17 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question: text,
-          analysis: rawQcAnalysis,
+          analysis: activeAnalysis,
           history: analysisQa.map((turn) => ({ role: turn.role, content: turn.content })),
         }),
       });
       if (!response.ok) {
         throw new Error(await response.text());
       }
-      const payload = await response.json();
+      const payload: RawQcChatResponse = await response.json();
+      if (payload.analysis) {
+        setRawQcAnalysis(payload.analysis);
+      }
       if (payload.samtools_result) {
         setRawQcAnalysis((current) =>
           current
@@ -1399,6 +1911,8 @@ export default function Page() {
             : current,
         );
         setActiveStudioView("samtools");
+      } else if (payload.requested_view) {
+        setActiveStudioView(payload.requested_view);
       }
       setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
       setFollowUpAnswer(payload.answer);
@@ -1413,9 +1927,10 @@ export default function Page() {
     }
   }
 
-  async function handleAskSummaryStatsQuestion(questionText?: string) {
+  async function handleAskSummaryStatsQuestion(questionText?: string, analysisOverride?: SummaryStatsResponse | null) {
     const text = questionText?.trim() ?? "";
-    if (!text || !summaryStatsAnalysis) {
+    const activeAnalysis = analysisOverride ?? summaryStatsAnalysis;
+    if (!text || !activeAnalysis) {
       return;
     }
 
@@ -1428,7 +1943,7 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question: text,
-          analysis: summaryStatsAnalysis,
+          analysis: activeAnalysis,
           history: analysisQa.map((turn) => ({ role: turn.role, content: turn.content })),
         }),
       });
@@ -1436,6 +1951,12 @@ export default function Page() {
         throw new Error(await response.text());
       }
       const payload: SummaryStatsChatResponse = await response.json();
+      if (payload.analysis) {
+        setSummaryStatsAnalysis(payload.analysis);
+      }
+      if (payload.requested_view) {
+        setActiveStudioView(payload.requested_view);
+      }
       setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
       setFollowUpAnswer(payload.answer);
       setStatus("Answer ready");
@@ -1534,11 +2055,8 @@ export default function Page() {
             ? "Raw QC ready"
             : "Summary stats ready"
         : status;
-  const chatTurns = [
-    ...messages
-      .filter((message) => message.role === "user")
-      .map((message) => ({ role: message.role, content: message.content })),
-    ...(analysis || rawQcAnalysis || summaryStatsAnalysis
+  const summaryTurn =
+    analysis || rawQcAnalysis || summaryStatsAnalysis
       ? [
           {
             role: "assistant" as const,
@@ -1547,9 +2065,14 @@ export default function Page() {
               "분석이 완료되면 grounded summary가 여기에 표시됩니다.",
           },
         ]
-      : []),
-    ...analysisQa,
-  ];
+      : [];
+  const messageTurns = messages
+    .filter((message) => message.kind !== "status")
+    .map((message) => ({ role: message.role, content: message.content }));
+  const chatTurns =
+    messageTurns.length === 0 && analysisQa.length === 0
+      ? [...summaryTurn]
+      : [...summaryTurn, ...messageTurns, ...analysisQa];
   const qcMetrics = analysis?.facts.qc ?? null;
   const clinvarCounts = useMemo(() => {
     if (!analysis) {
@@ -1749,38 +2272,71 @@ export default function Page() {
       .sort((left, right) => right.score - left.score)
       .slice(0, 8);
   }, [analysis]);
+  const snpeffResultForStudio = analysis?.snpeff_result ?? directSnpeffResult;
+  const plinkResultForStudio = analysis?.plink_result ?? directPlinkResult;
+  const liftoverResultForStudio = analysis?.liftover_result ?? directLiftoverResult;
+  const ldblockshowResultForStudio = analysis?.ldblockshow_result ?? directLdblockshowResult;
+  const samtoolsResultForStudio = rawQcAnalysis?.samtools_result ?? directSamtoolsResult;
+  const hasStudioState = Boolean(
+    analysis ||
+      rawQcAnalysis ||
+      summaryStatsAnalysis ||
+      snpeffResultForStudio ||
+      plinkResultForStudio ||
+      liftoverResultForStudio ||
+      ldblockshowResultForStudio ||
+      samtoolsResultForStudio,
+  );
   const studioCards: Array<{ id: StudioView; title: string; subtitle: string }> = rawQcAnalysis
     ? [
         { id: "rawqc", title: "FastQC Review", subtitle: "Raw sequencing module summary" },
-        ...(rawQcAnalysis.samtools_result
+        ...(samtoolsResultForStudio
           ? [{ id: "samtools" as StudioView, title: "Samtools Review", subtitle: "Alignment QC summary" }]
           : []),
       ]
     : summaryStatsAnalysis
       ? [{ id: "sumstats" as StudioView, title: "Summary Stats Review", subtitle: "Post-GWAS intake and column mapping" }]
-    : [
-        { id: "provenance", title: "Workflow Setup", subtitle: "Tools, scope, and run policy" },
-        { id: "qc", title: "QC Summary", subtitle: "PASS, Ti/Tv, GT quality" },
-        { id: "coverage", title: "Clinical Coverage", subtitle: "Annotation completeness view" },
-        { id: "snpeff", title: "SnpEff Review", subtitle: "Local effect annotation preview" },
-        { id: "plink", title: "PLINK", subtitle: "QC command runner and result review" },
-        ...(analysis?.liftover_result
+    : analysis
+      ? [
+          { id: "provenance", title: "Workflow Setup", subtitle: "Tools, scope, and run policy" },
+          { id: "qc", title: "QC Summary", subtitle: "PASS, Ti/Tv, GT quality" },
+          { id: "coverage", title: "Clinical Coverage", subtitle: "Annotation completeness view" },
+          { id: "snpeff", title: "SnpEff Review", subtitle: "Local effect annotation preview" },
+          { id: "plink", title: "PLINK", subtitle: "QC command runner and result review" },
+          ...(liftoverResultForStudio
+            ? [{ id: "liftover" as StudioView, title: "LiftOver Review", subtitle: "Genome build conversion result" }]
+            : []),
+          ...(ldblockshowResultForStudio
+            ? [{ id: "ldblockshow" as StudioView, title: "LD Block Review", subtitle: "Locus-level LD heatmap" }]
+            : []),
+          { id: "table", title: "Filtering View", subtitle: "Searchable variant triage" },
+          { id: "symbolic", title: "Symbolic ALT Review", subtitle: "Structural-style records split out" },
+          { id: "roh", title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" },
+          { id: "candidates", title: "Candidate Variants", subtitle: "Ranked review shortlist" },
+          { id: "vep", title: "VEP Consequence", subtitle: "Consequence and gene burden" },
+          { id: "clinvar", title: "ClinVar Review", subtitle: "Clinical significance mix" },
+          { id: "annotations", title: "Annotation Cards", subtitle: "Variant detail cards" },
+          { id: "igv", title: "IGV Plot", subtitle: "Locus visualization" },
+          { id: "acmg", title: "ACMG Review", subtitle: "Evidence hints, not final calls" },
+          { id: "references", title: "References", subtitle: "Linked evidence" },
+        ]
+      : [
+          ...(samtoolsResultForStudio
+            ? [{ id: "samtools" as StudioView, title: "Samtools Review", subtitle: "Alignment QC summary" }]
+            : []),
+          ...(snpeffResultForStudio
+            ? [{ id: "snpeff" as StudioView, title: "SnpEff Review", subtitle: "Local effect annotation preview" }]
+            : []),
+          ...(plinkResultForStudio
+            ? [{ id: "plink" as StudioView, title: "PLINK", subtitle: "QC command runner and result review" }]
+            : []),
+          ...(liftoverResultForStudio
           ? [{ id: "liftover" as StudioView, title: "LiftOver Review", subtitle: "Genome build conversion result" }]
           : []),
-        ...(analysis?.ldblockshow_result
+          ...(ldblockshowResultForStudio
           ? [{ id: "ldblockshow" as StudioView, title: "LD Block Review", subtitle: "Locus-level LD heatmap" }]
           : []),
-        { id: "table", title: "Filtering View", subtitle: "Searchable variant triage" },
-        { id: "symbolic", title: "Symbolic ALT Review", subtitle: "Structural-style records split out" },
-        { id: "roh", title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" },
-        { id: "candidates", title: "Candidate Variants", subtitle: "Ranked review shortlist" },
-        { id: "vep", title: "VEP Consequence", subtitle: "Consequence and gene burden" },
-        { id: "clinvar", title: "ClinVar Review", subtitle: "Clinical significance mix" },
-        { id: "annotations", title: "Annotation Cards", subtitle: "Variant detail cards" },
-        { id: "igv", title: "IGV Plot", subtitle: "Locus visualization" },
-        { id: "acmg", title: "ACMG Review", subtitle: "Evidence hints, not final calls" },
-        { id: "references", title: "References", subtitle: "Linked evidence" },
-      ];
+        ];
   const studioContext = useMemo(() => {
     if (!analysis) {
       return {};
@@ -2007,7 +2563,7 @@ export default function Page() {
                         {activeToolRegistry?.length ? (
                           activeToolRegistry.map((tool) => (
                             <div key={tool.name} className="toolRegistryItem" title={tool.description}>
-                              <span className="toolRegistryName">{tool.name}</span>
+                              <span className="toolRegistryName">{displayToolAlias(tool.name)}</span>
                               <span className="toolRegistryTask">{tool.task}</span>
                             </div>
                           ))
@@ -2021,16 +2577,28 @@ export default function Page() {
                   </div>
 
                   <div className="toolUsageLog">
-                    <span>Used tools</span>
-                    {(analysis?.used_tools?.length || rawQcAnalysis?.used_tools?.length || summaryStatsAnalysis?.used_tools?.length) ? (
-                      <ul className="toolUsageList">
-                        {(analysis?.used_tools ?? rawQcAnalysis?.used_tools ?? summaryStatsAnalysis?.used_tools ?? []).map((toolName, index) => (
-                          <li key={`${toolName}-${index}`}>{toolName}</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="toolUsageEmpty">No tool has been logged for this run yet.</p>
-                    )}
+                    <button
+                      type="button"
+                      className="toolRegistrySummary"
+                      onClick={() => setSkillRegistryOpen((current) => !current)}
+                    >
+                      Available Skills
+                      <span className="toolRegistryCount">{availableWorkflows.length}</span>
+                    </button>
+                    {skillRegistryOpen ? (
+                      <div className="toolRegistryMenu">
+                        {availableWorkflows.length ? (
+                          availableWorkflows.map((workflow) => (
+                            <div key={workflow.name} className="toolRegistryItem" title={workflow.description}>
+                              <span className="toolRegistryName">{`@skill ${workflow.name}`}</span>
+                              <span className="toolRegistryTask">{workflow.source_type}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="toolRegistryEmpty">No available skill is registered for the current source.</p>
+                        )}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </section>
@@ -2116,7 +2684,7 @@ export default function Page() {
             <h2>Studio</h2>
           </div>
           <div className="studioPanelBody">
-            {analysis || rawQcAnalysis || summaryStatsAnalysis ? (
+            {hasStudioState ? (
               <div className="studioGrid">
                 {studioCards.map((card) => (
                   <button
@@ -2132,13 +2700,13 @@ export default function Page() {
               </div>
             ) : null}
             <div className="studioHint">
-              {analysis || rawQcAnalysis || summaryStatsAnalysis ? "Choose a card to open a result view." : "Studio cards will appear after tool-driven analysis results are ready."}
+              {hasStudioState ? "Choose a card to open a result view." : "Studio cards will appear after tool-driven analysis results are ready."}
             </div>
           </div>
         </aside>
       </div>
 
-      {(analysis || rawQcAnalysis || summaryStatsAnalysis) && activeStudioView ? (
+      {hasStudioState && activeStudioView ? (
         <section ref={studioCanvasRef} className="studioCanvas">
           {summaryStatsAnalysis && activeStudioView === "sumstats" ? (
             <section className="notebookPanel studioCanvasPanel">
@@ -2281,21 +2849,21 @@ export default function Page() {
               </div>
             </section>
           ) : null}
-          {rawQcAnalysis && activeStudioView === "samtools" ? (
+          {(rawQcAnalysis || samtoolsResultForStudio) && activeStudioView === "samtools" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>Samtools Review</h2>
               </div>
               <div className="studioCanvasBody">
-                {rawQcAnalysis.samtools_result ? (
+                {samtoolsResultForStudio ? (
                   <>
                     <div className="resultMetricGrid">
-                      <MetricTile label="File kind" value={rawQcAnalysis.samtools_result.file_kind} tone="good" />
+                      <MetricTile label="File kind" value={samtoolsResultForStudio.file_kind} tone="good" />
                       <MetricTile
                         label="Total reads"
                         value={
-                          rawQcAnalysis.samtools_result.total_reads != null
-                            ? String(rawQcAnalysis.samtools_result.total_reads)
+                          samtoolsResultForStudio.total_reads != null
+                            ? String(samtoolsResultForStudio.total_reads)
                             : "n/a"
                         }
                         tone="neutral"
@@ -2303,10 +2871,10 @@ export default function Page() {
                       <MetricTile
                         label="Mapped"
                         value={
-                          rawQcAnalysis.samtools_result.mapped_reads != null
-                            ? `${rawQcAnalysis.samtools_result.mapped_reads}${
-                                rawQcAnalysis.samtools_result.mapped_rate != null
-                                  ? ` (${rawQcAnalysis.samtools_result.mapped_rate.toFixed(2)}%)`
+                          samtoolsResultForStudio.mapped_reads != null
+                            ? `${samtoolsResultForStudio.mapped_reads}${
+                                samtoolsResultForStudio.mapped_rate != null
+                                  ? ` (${samtoolsResultForStudio.mapped_rate.toFixed(2)}%)`
                                   : ""
                               }`
                             : "n/a"
@@ -2316,10 +2884,10 @@ export default function Page() {
                       <MetricTile
                         label="Properly paired"
                         value={
-                          rawQcAnalysis.samtools_result.properly_paired_reads != null
-                            ? `${rawQcAnalysis.samtools_result.properly_paired_reads}${
-                                rawQcAnalysis.samtools_result.properly_paired_rate != null
-                                  ? ` (${rawQcAnalysis.samtools_result.properly_paired_rate.toFixed(2)}%)`
+                          samtoolsResultForStudio.properly_paired_reads != null
+                            ? `${samtoolsResultForStudio.properly_paired_reads}${
+                                samtoolsResultForStudio.properly_paired_rate != null
+                                  ? ` (${samtoolsResultForStudio.properly_paired_rate.toFixed(2)}%)`
                                   : ""
                               }`
                             : "n/a"
@@ -2328,12 +2896,12 @@ export default function Page() {
                       />
                       <MetricTile
                         label="Quickcheck"
-                        value={rawQcAnalysis.samtools_result.quickcheck_ok ? "PASS" : "Issue detected"}
-                        tone={rawQcAnalysis.samtools_result.quickcheck_ok ? "good" : "warn"}
+                        value={samtoolsResultForStudio.quickcheck_ok ? "PASS" : "Issue detected"}
+                        tone={samtoolsResultForStudio.quickcheck_ok ? "good" : "warn"}
                       />
                       <MetricTile
                         label="Index"
-                        value={rawQcAnalysis.samtools_result.index_path ? "Created / available" : "n/a"}
+                        value={samtoolsResultForStudio.index_path ? "Created / available" : "n/a"}
                         tone="neutral"
                       />
                     </div>
@@ -2341,7 +2909,7 @@ export default function Page() {
                       <article className="miniCard">
                         <h3>samtools stats highlights</h3>
                         <div className="resultList">
-                          {rawQcAnalysis.samtools_result.stats_highlights.map((item) => (
+                          {samtoolsResultForStudio.stats_highlights.map((item) => (
                             <article key={item.label} className="resultListItem resultListStatic">
                               <strong>{item.label}</strong>
                               <span>{item.value}</span>
@@ -2352,7 +2920,7 @@ export default function Page() {
                       <article className="miniCard">
                         <h3>idxstats preview</h3>
                         <div className="resultList">
-                          {rawQcAnalysis.samtools_result.idxstats_rows.map((row) => (
+                          {samtoolsResultForStudio.idxstats_rows.map((row) => (
                             <article key={`${row.contig}-${row.length_bp}`} className="resultListItem resultListStatic">
                               <strong>{row.contig}</strong>
                               <span>
@@ -2363,9 +2931,9 @@ export default function Page() {
                         </div>
                       </article>
                     </div>
-                    {rawQcAnalysis.samtools_result.warnings.length ? (
+                    {samtoolsResultForStudio.warnings.length ? (
                       <div className="resultList">
-                        {rawQcAnalysis.samtools_result.warnings.map((warning, index) => (
+                        {samtoolsResultForStudio.warnings.map((warning, index) => (
                           <article key={`${warning}-${index}`} className="miniCard">
                             <h3>Warning</h3>
                             <p>{warning}</p>
@@ -2569,21 +3137,21 @@ export default function Page() {
             </section>
           ) : null}
 
-          {analysis && activeStudioView === "snpeff" ? (
+          {(analysis || snpeffResultForStudio) && activeStudioView === "snpeff" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>SnpEff Review</h2>
               </div>
               <div className="studioCanvasBody">
-                {analysis.snpeff_result ? (
+                {snpeffResultForStudio ? (
                   <>
                     <div className="resultMetricGrid">
-                      <MetricTile label="Genome DB" value={analysis.snpeff_result.genome} tone="good" />
-                      <MetricTile label="Preview rows" value={String(analysis.snpeff_result.parsed_records.length)} tone="neutral" />
-                      <MetricTile label="Tool" value={analysis.snpeff_result.tool} tone="neutral" />
+                      <MetricTile label="Genome DB" value={snpeffResultForStudio.genome} tone="good" />
+                      <MetricTile label="Preview rows" value={String(snpeffResultForStudio.parsed_records.length)} tone="neutral" />
+                      <MetricTile label="Tool" value={snpeffResultForStudio.tool} tone="neutral" />
                     </div>
                     <div className="resultList">
-                      {analysis.snpeff_result.parsed_records.map((record, index) => (
+                      {snpeffResultForStudio.parsed_records.map((record, index) => (
                         <article key={`${record.contig}-${record.pos_1based}-${record.alt}-${index}`} className="resultListItem resultListStatic">
                           <strong>
                             {record.contig}:{record.pos_1based} {record.ref}&gt;{record.alt}
@@ -2602,7 +3170,7 @@ export default function Page() {
                     <div className="resultActionRow">
                       <a
                         className="sourceAddButton"
-                        href={`file://${analysis.snpeff_result.output_path}`}
+                        href={`file://${snpeffResultForStudio.output_path}`}
                         target="_blank"
                         rel="noreferrer"
                       >
@@ -2617,7 +3185,7 @@ export default function Page() {
             </section>
           ) : null}
 
-          {analysis && activeStudioView === "plink" ? (
+          {(analysis || plinkResultForStudio) && activeStudioView === "plink" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>PLINK</h2>
@@ -2625,11 +3193,15 @@ export default function Page() {
               <div className="studioCanvasBody">
                 <div className="resultMetricGrid">
                   <MetricTile label="Mode" value="QC" tone="good" />
-                  <MetricTile label="Source" value={analysis.facts.file_name} tone="neutral" />
+                  <MetricTile
+                    label="Source"
+                    value={analysis?.facts.file_name ?? activeSource?.file_name ?? attachedFile?.name ?? "n/a"}
+                    tone="neutral"
+                  />
                   <MetricTile
                     label="Existing result"
-                    value={analysis.plink_result ? "Available" : "Not run yet"}
-                    tone={analysis.plink_result ? "good" : "neutral"}
+                    value={plinkResultForStudio ? "Available" : "Not run yet"}
+                    tone={plinkResultForStudio ? "good" : "neutral"}
                   />
                   <MetricTile
                     label="Runner"
@@ -2703,39 +3275,39 @@ export default function Page() {
                     className="sourceAddButton"
                     type="button"
                     onClick={() => void handleRunPlink()}
-                    disabled={plinkRunning || !analysis.source_vcf_path}
+                    disabled={plinkRunning || !(analysis?.source_vcf_path || (activeSource?.source_type === "vcf" ? activeSource.source_path : null))}
                   >
                     {plinkRunning ? "Running PLINK..." : "Run PLINK"}
                   </button>
                 </div>
-                {analysis.plink_result ? (
+                {plinkResultForStudio ? (
                   <>
                     <div className="resultMetricGrid">
                       <MetricTile
                         label="Samples"
                         value={
-                          analysis.plink_result.sample_count != null ? String(analysis.plink_result.sample_count) : "n/a"
+                          plinkResultForStudio.sample_count != null ? String(plinkResultForStudio.sample_count) : "n/a"
                         }
                         tone="neutral"
                       />
                       <MetricTile
                         label="Variants"
                         value={
-                          analysis.plink_result.variant_count != null ? String(analysis.plink_result.variant_count) : "n/a"
+                          plinkResultForStudio.variant_count != null ? String(plinkResultForStudio.variant_count) : "n/a"
                         }
                         tone="neutral"
                       />
-                      <MetricTile label="Freq rows" value={String(analysis.plink_result.freq_rows.length)} tone="good" />
+                      <MetricTile label="Freq rows" value={String(plinkResultForStudio.freq_rows.length)} tone="good" />
                       <MetricTile
                         label="Missing rows"
-                        value={String(analysis.plink_result.missing_rows.length)}
+                        value={String(plinkResultForStudio.missing_rows.length)}
                         tone="good"
                       />
-                      <MetricTile label="Hardy rows" value={String(analysis.plink_result.hardy_rows.length)} tone="good" />
-                      <MetricTile label="Warnings" value={String(analysis.plink_result.warnings.length)} tone="neutral" />
+                      <MetricTile label="Hardy rows" value={String(plinkResultForStudio.hardy_rows.length)} tone="good" />
+                      <MetricTile label="Warnings" value={String(plinkResultForStudio.warnings.length)} tone="neutral" />
                     </div>
                     <div className="resultList">
-                      {analysis.plink_result.freq_rows.slice(0, 5).map((row, index) => (
+                      {plinkResultForStudio.freq_rows.slice(0, 5).map((row, index) => (
                         <article key={`plink-freq-${row.variant_id}-${index}`} className="resultListItem resultListStatic">
                           <strong>
                             {row.chrom}:{row.variant_id}
@@ -2747,7 +3319,7 @@ export default function Page() {
                           </span>
                         </article>
                       ))}
-                      {analysis.plink_result.missing_rows.slice(0, 3).map((row, index) => (
+                      {plinkResultForStudio.missing_rows.slice(0, 3).map((row, index) => (
                         <article
                           key={`plink-missing-${row.sample_id}-${index}`}
                           className="resultListItem resultListStatic"
@@ -2759,7 +3331,7 @@ export default function Page() {
                           </span>
                         </article>
                       ))}
-                      {analysis.plink_result.hardy_rows.slice(0, 5).map((row, index) => (
+                      {plinkResultForStudio.hardy_rows.slice(0, 5).map((row, index) => (
                         <article key={`plink-hardy-${row.variant_id}-${index}`} className="resultListItem resultListStatic">
                           <strong>
                             Hardy {row.chrom}:{row.variant_id}
@@ -2771,7 +3343,7 @@ export default function Page() {
                           </span>
                         </article>
                       ))}
-                      {analysis.plink_result.warnings.map((warning, index) => (
+                      {plinkResultForStudio.warnings.map((warning, index) => (
                         <article key={`plink-warning-${index}`} className="resultListItem resultListStatic">
                           <strong>Warning {index + 1}</strong>
                           <span>{warning}</span>
@@ -2779,11 +3351,11 @@ export default function Page() {
                       ))}
                     </div>
                     <div className="resultActionRow">
-                      {analysis.plink_result.freq_path ? (
+                      {plinkResultForStudio.freq_path ? (
                         <a
                           className="sourceAddButton"
                           href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            analysis.plink_result.freq_path,
+                            plinkResultForStudio.freq_path,
                           )}`}
                           target="_blank"
                           rel="noreferrer"
@@ -2791,11 +3363,11 @@ export default function Page() {
                           Open afreq
                         </a>
                       ) : null}
-                      {analysis.plink_result.missing_path ? (
+                      {plinkResultForStudio.missing_path ? (
                         <a
                           className="sourceAddButton"
                           href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            analysis.plink_result.missing_path,
+                            plinkResultForStudio.missing_path,
                           )}`}
                           target="_blank"
                           rel="noreferrer"
@@ -2803,11 +3375,11 @@ export default function Page() {
                           Open smiss
                         </a>
                       ) : null}
-                      {analysis.plink_result.hardy_path ? (
+                      {plinkResultForStudio.hardy_path ? (
                         <a
                           className="sourceAddButton"
                           href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            analysis.plink_result.hardy_path,
+                            plinkResultForStudio.hardy_path,
                           )}`}
                           target="_blank"
                           rel="noreferrer"
@@ -2815,11 +3387,11 @@ export default function Page() {
                           Open hardy
                         </a>
                       ) : null}
-                      {analysis.plink_result.log_path ? (
+                      {plinkResultForStudio.log_path ? (
                         <a
                           className="sourceAddButton"
                           href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            analysis.plink_result.log_path,
+                            plinkResultForStudio.log_path,
                           )}`}
                           target="_blank"
                           rel="noreferrer"
@@ -2836,25 +3408,25 @@ export default function Page() {
             </section>
           ) : null}
 
-          {analysis && activeStudioView === "liftover" ? (
+          {(analysis || liftoverResultForStudio) && activeStudioView === "liftover" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>LiftOver Review</h2>
               </div>
               <div className="studioCanvasBody">
-                {analysis.liftover_result ? (
+                {liftoverResultForStudio ? (
                   <>
                     <div className="resultMetricGrid">
-                      <MetricTile label="Source build" value={analysis.liftover_result.source_build ?? "unknown"} tone="neutral" />
-                      <MetricTile label="Target build" value={analysis.liftover_result.target_build ?? "unknown"} tone="good" />
-                      <MetricTile label="Lifted records" value={String(analysis.liftover_result.lifted_record_count ?? 0)} tone="good" />
-                      <MetricTile label="Rejected records" value={String(analysis.liftover_result.rejected_record_count ?? 0)} tone="neutral" />
-                      <MetricTile label="Warnings" value={String(analysis.liftover_result.warnings.length)} tone="neutral" />
-                      <MetricTile label="Tool" value={analysis.liftover_result.tool} tone="neutral" />
+                      <MetricTile label="Source build" value={liftoverResultForStudio.source_build ?? "unknown"} tone="neutral" />
+                      <MetricTile label="Target build" value={liftoverResultForStudio.target_build ?? "unknown"} tone="good" />
+                      <MetricTile label="Lifted records" value={String(liftoverResultForStudio.lifted_record_count ?? 0)} tone="good" />
+                      <MetricTile label="Rejected records" value={String(liftoverResultForStudio.rejected_record_count ?? 0)} tone="neutral" />
+                      <MetricTile label="Warnings" value={String(liftoverResultForStudio.warnings.length)} tone="neutral" />
+                      <MetricTile label="Tool" value={liftoverResultForStudio.tool} tone="neutral" />
                     </div>
                     <div className="resultList">
-                      {analysis.liftover_result.parsed_records.length ? (
-                        analysis.liftover_result.parsed_records.map((record, index) => (
+                      {liftoverResultForStudio.parsed_records.length ? (
+                        liftoverResultForStudio.parsed_records.map((record, index) => (
                           <article key={`${record.contig}-${record.pos_1based}-${index}`} className="resultListItem resultListStatic">
                             <strong>
                               {record.contig}:{record.pos_1based} {record.ref}&gt;{record.alts.join(",")}
@@ -2865,8 +3437,8 @@ export default function Page() {
                       ) : (
                         <p className="emptyState">No lifted preview records are available for this result.</p>
                       )}
-                      {analysis.liftover_result.warnings.length
-                        ? analysis.liftover_result.warnings.map((warning, index) => (
+                      {liftoverResultForStudio.warnings.length
+                        ? liftoverResultForStudio.warnings.map((warning, index) => (
                             <article key={`liftover-warning-${index}`} className="resultListItem resultListStatic">
                               <strong>Warning {index + 1}</strong>
                               <span>{warning}</span>
@@ -2878,7 +3450,7 @@ export default function Page() {
                       <a
                         className="sourceAddButton"
                         href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                          analysis.liftover_result.output_path,
+                          liftoverResultForStudio.output_path,
                         )}`}
                         target="_blank"
                         rel="noreferrer"
@@ -2888,7 +3460,7 @@ export default function Page() {
                       <a
                         className="sourceAddButton"
                         href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                          analysis.liftover_result.reject_path,
+                          liftoverResultForStudio.reject_path,
                         )}`}
                         target="_blank"
                         rel="noreferrer"
@@ -2904,47 +3476,47 @@ export default function Page() {
             </section>
           ) : null}
 
-          {analysis && activeStudioView === "ldblockshow" ? (
+          {(analysis || ldblockshowResultForStudio) && activeStudioView === "ldblockshow" ? (
             <section className="notebookPanel studioCanvasPanel">
               <div className="notebookHeader">
                 <h2>LD Block Review</h2>
               </div>
               <div className="studioCanvasBody">
-                {analysis.ldblockshow_result ? (
+                {ldblockshowResultForStudio ? (
                   <>
                     <div className="resultMetricGrid">
-                      <MetricTile label="Region" value={analysis.ldblockshow_result.region} tone="good" />
+                      <MetricTile label="Region" value={ldblockshowResultForStudio.region} tone="good" />
                       <MetricTile
                         label="Tried regions"
-                        value={String(analysis.ldblockshow_result.attempted_regions?.length ?? 0)}
+                        value={String(ldblockshowResultForStudio.attempted_regions?.length ?? 0)}
                         tone="neutral"
                       />
                       <MetricTile
                         label="Site rows"
-                        value={String(analysis.ldblockshow_result.site_row_count ?? 0)}
+                        value={String(ldblockshowResultForStudio.site_row_count ?? 0)}
                         tone="neutral"
                       />
                       <MetricTile
                         label="Triangle pairs"
-                        value={String(analysis.ldblockshow_result.triangle_pair_count ?? 0)}
+                        value={String(ldblockshowResultForStudio.triangle_pair_count ?? 0)}
                         tone="neutral"
                       />
                       <MetricTile
                         label="Warnings"
-                        value={String(analysis.ldblockshow_result.warnings.length)}
+                        value={String(ldblockshowResultForStudio.warnings.length)}
                         tone="neutral"
                       />
-                      <MetricTile label="Tool" value={analysis.ldblockshow_result.tool} tone="neutral" />
+                      <MetricTile label="Tool" value={ldblockshowResultForStudio.tool} tone="neutral" />
                     </div>
                     <div className="resultList">
-                      {analysis.ldblockshow_result.attempted_regions?.length ? (
+                      {ldblockshowResultForStudio.attempted_regions?.length ? (
                         <article className="resultListItem resultListStatic">
                           <strong>Attempted regions</strong>
-                          <span>{analysis.ldblockshow_result.attempted_regions.join(" -> ")}</span>
+                          <span>{ldblockshowResultForStudio.attempted_regions.join(" -> ")}</span>
                         </article>
                       ) : null}
-                      {analysis.ldblockshow_result.warnings.length ? (
-                        analysis.ldblockshow_result.warnings.map((warning, index) => (
+                      {ldblockshowResultForStudio.warnings.length ? (
+                        ldblockshowResultForStudio.warnings.map((warning, index) => (
                           <article key={`ldblockshow-warning-${index}`} className="resultListItem resultListStatic">
                             <strong>Warning {index + 1}</strong>
                             <span>{warning}</span>
@@ -2955,11 +3527,11 @@ export default function Page() {
                       )}
                     </div>
                     <div className="resultActionRow">
-                      {analysis.ldblockshow_result.svg_path ? (
+                      {ldblockshowResultForStudio.svg_path ? (
                         <a
                           className="sourceAddButton"
                           href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            analysis.ldblockshow_result.svg_path,
+                            ldblockshowResultForStudio.svg_path,
                           )}`}
                           target="_blank"
                           rel="noreferrer"
@@ -2967,11 +3539,11 @@ export default function Page() {
                           Open LD SVG
                         </a>
                       ) : null}
-                      {analysis.ldblockshow_result.block_path ? (
+                      {ldblockshowResultForStudio.block_path ? (
                         <a
                           className="sourceAddButton"
                           href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            analysis.ldblockshow_result.block_path,
+                            ldblockshowResultForStudio.block_path,
                           )}`}
                           target="_blank"
                           rel="noreferrer"
@@ -2979,11 +3551,11 @@ export default function Page() {
                           Open block table
                         </a>
                       ) : null}
-                      {analysis.ldblockshow_result.site_path ? (
+                      {ldblockshowResultForStudio.site_path ? (
                         <a
                           className="sourceAddButton"
                           href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            analysis.ldblockshow_result.site_path,
+                            ldblockshowResultForStudio.site_path,
                           )}`}
                           target="_blank"
                           rel="noreferrer"

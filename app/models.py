@@ -219,6 +219,7 @@ class AnalysisChatResponse(BaseModel):
     used_fallback: bool
     used_tools: list[str] = []
     requested_view: Optional[str] = None
+    analysis: Optional[AnalysisResponse] = None
     plink_result: Optional[PlinkResponse] = None
     liftover_result: Optional[GatkLiftoverVcfResponse] = None
     ldblockshow_result: Optional[LDBlockShowResponse] = None
@@ -264,6 +265,8 @@ class RawQcChatResponse(BaseModel):
     answer: str
     citations: list[str]
     used_fallback: bool
+    requested_view: Optional[str] = None
+    analysis: Optional[RawQcResponse] = None
     samtools_result: Optional[SamtoolsResponse] = None
 
 
@@ -321,6 +324,8 @@ class SummaryStatsChatResponse(BaseModel):
     answer: str
     citations: list[str]
     used_fallback: bool
+    requested_view: Optional[str] = None
+    analysis: Optional[SummaryStatsResponse] = None
 
 
 class WorkflowStartRequest(BaseModel):
@@ -339,6 +344,13 @@ class WorkflowAgentResponse(BaseModel):
     parsed_limit: Optional[int] = None
     used_fallback: bool
     model: str
+
+
+class SourceReadyResponse(BaseModel):
+    source_type: Literal["vcf", "raw_qc", "summary_stats"]
+    file_name: str
+    source_path: str
+    file_kind: Optional[str] = None
 
 
 class FilterRequest(BaseModel):

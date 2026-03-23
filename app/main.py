@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -38,6 +39,7 @@ from app.models import (
     SnpEffResponse,
     SamtoolsRequest,
     SamtoolsResponse,
+    SourceReadyResponse,
     SummaryStatsRowsRequest,
     SummaryStatsRowsResponse,
     SummaryStatsChatRequest,
@@ -70,6 +72,7 @@ from app.services.tool_runner import discover_tools, run_tool
 from app.services.variant_annotation import annotate_variants
 from app.services.vcf_summary import summarize_vcf
 from app.services.workflow_agent import interpret_workflow_reply, start_workflow
+from app.services.workflows import analyze_raw_qc_workflow, analyze_summary_stats_workflow, analyze_vcf_workflow
 
 
 def _load_local_env() -> None:
@@ -113,6 +116,99 @@ ANALYSIS_UPLOAD_DIR = ROOT_DIR / "uploads" / "analysis"
 RAW_QC_UPLOAD_DIR = ROOT_DIR / "uploads" / "raw_qc"
 SUMMARY_STATS_UPLOAD_DIR = ROOT_DIR / "uploads" / "summary_stats"
 PLUGINS_DIR = ROOT_DIR / "plugins"
+WORKFLOWS_DIR = ROOT_DIR / "skills" / "chatgenome-orchestrator" / "workflows"
+
+
+def _load_tool_manifests() -> list[dict[str, object]]:
+    manifests: list[dict[str, object]] = []
+    for manifest in sorted(PLUGINS_DIR.glob("*/tool.json")):
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            manifests.append(payload)
+    return manifests
+
+
+def _tool_aliases(manifest: dict[str, object]) -> list[str]:
+    import re
+
+    aliases: set[str] = set()
+    name = str(manifest.get("name") or "").strip().lower()
+    if name:
+        aliases.add(name)
+        simplified = re.sub(r"^(gatk_|bcftools_)", "", name)
+        simplified = re.sub(r"_(execution|vcf|tool)$", "", simplified)
+        simplified = re.sub(r"_+", "_", simplified).strip("_")
+        if simplified:
+            aliases.add(simplified)
+            aliases.add(simplified.replace("_", ""))
+            aliases.add(simplified.replace("_", "-"))
+    routing = manifest.get("routing")
+    if isinstance(routing, dict):
+        for keyword in routing.get("trigger_keywords", []):
+            text = str(keyword).strip().lower()
+            if text:
+                aliases.add(text)
+    return sorted(aliases)
+
+
+def _render_tool_help(manifest: dict[str, object]) -> str:
+    name = str(manifest.get("name") or "tool")
+    help_block = manifest.get("help")
+    if not isinstance(help_block, dict):
+        aliases = ", ".join(f"@{item}" for item in _tool_aliases(manifest)[:4])
+        return (
+            f"`{name}` is registered, but no curated help metadata is available yet.\n\n"
+            f"- Try one of these aliases: {aliases or '@tool'}"
+        )
+    lines: list[str] = []
+    summary = str(help_block.get("summary") or "").strip()
+    if summary:
+        lines.append(f"**{name}**")
+        lines.append("")
+        lines.append(summary)
+    modes = help_block.get("modes") or []
+    if isinstance(modes, list) and modes:
+        lines.append("")
+        lines.append("Available modes")
+        for mode in modes:
+            if isinstance(mode, dict):
+                mode_name = str(mode.get("name") or "").strip()
+                mode_description = str(mode.get("description") or "").strip()
+                if mode_name:
+                    lines.append(f"- `{mode_name}`: {mode_description}")
+    options = help_block.get("options") or []
+    if isinstance(options, list) and options:
+        lines.append("")
+        lines.append("Options")
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            option_name = str(option.get("name") or "").strip()
+            option_type = str(option.get("type") or "").strip()
+            option_description = str(option.get("description") or "").strip()
+            default = option.get("default")
+            default_suffix = f" Default: `{default}`." if default not in (None, "") else ""
+            if option_name:
+                label = f"`{option_name}`"
+                if option_type:
+                    label += f" ({option_type})"
+                lines.append(f"- {label}: {option_description}{default_suffix}")
+    examples = help_block.get("examples") or []
+    if isinstance(examples, list) and examples:
+        lines.append("")
+        lines.append("Examples")
+        for example in examples:
+            lines.append(f"- `{example}`")
+    notes = help_block.get("notes") or []
+    if isinstance(notes, list) and notes:
+        lines.append("")
+        lines.append("Notes")
+        for note in notes:
+            lines.append(f"- {note}")
+    return "\n".join(lines).strip()
 
 
 def _annotation_key(item: VariantAnnotation) -> tuple[str, int, str, tuple[str, ...]]:
@@ -433,6 +529,32 @@ def list_registry_tools() -> list[ToolInfo]:
     return discover_tools()
 
 
+@app.get("/api/v1/workflows")
+def list_registry_workflows() -> list[dict[str, object]]:
+    manifests: list[dict[str, object]] = []
+    for manifest in sorted(WORKFLOWS_DIR.glob("*.json")):
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            manifests.append(payload)
+    return manifests
+
+
+@app.get("/api/v1/tools/help")
+def get_tool_help(alias: str = Query(..., description="Tool alias such as snpeff, samtools, liftover, plink")) -> dict[str, object]:
+    target = alias.strip().lower()
+    for manifest in _load_tool_manifests():
+        if target in _tool_aliases(manifest):
+            return {
+                "name": manifest.get("name"),
+                "aliases": _tool_aliases(manifest),
+                "help": _render_tool_help(manifest),
+            }
+    raise HTTPException(status_code=404, detail=f"Unknown tool alias: {alias}")
+
+
 @app.get("/api/v1/files")
 def get_output_file(path: str = Query(..., description="Absolute path to a generated output file")) -> FileResponse:
     file_path = Path(path).resolve()
@@ -451,7 +573,7 @@ def get_output_file(path: str = Query(..., description="Absolute path to a gener
 @app.post("/api/v1/analysis/from-path", response_model=AnalysisResponse)
 def analyze_from_path(request: FromPathRequest) -> AnalysisResponse:
     try:
-        return _analyze_vcf(
+        return analyze_vcf_workflow(
             request.vcf_path,
             annotation_scope=request.annotation_scope,
             annotation_limit=request.annotation_limit,
@@ -467,7 +589,7 @@ def analyze_from_path_async(request: FromPathRequest) -> AnalysisJobResponse:
     job_id = create_job()
     run_job(
         job_id,
-        lambda: _analyze_vcf(
+        lambda: analyze_vcf_workflow(
             request.vcf_path,
             annotation_scope=request.annotation_scope,
             annotation_limit=request.annotation_limit,
@@ -614,7 +736,7 @@ async def analyze_upload(
     durable_path.write_bytes(await file.read())
 
     try:
-        return _analyze_vcf(
+        return analyze_vcf_workflow(
             str(durable_path),
             annotation_scope=annotation_scope,
             annotation_limit=annotation_limit,
@@ -637,7 +759,7 @@ async def analyze_raw_qc_upload(file: UploadFile = File(...)) -> RawQcResponse:
     safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in Path(filename).stem)
     durable_path = RAW_QC_UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}_{safe_stem}{suffixes}"
     durable_path.write_bytes(await file.read())
-    return _analyze_raw_qc(str(durable_path), filename)
+    return analyze_raw_qc_workflow(str(durable_path), filename)
 
 
 @app.post("/api/v1/summary-stats/upload", response_model=SummaryStatsResponse)
@@ -659,12 +781,62 @@ async def analyze_summary_stats_upload(
     durable_path = SUMMARY_STATS_UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}_{safe_stem}{suffixes}"
     durable_path.write_bytes(await file.read())
     try:
-        result = analyze_summary_stats(str(durable_path), filename, genome_build=genome_build, trait_type=trait_type)
-        result.analysis_id = str(uuid.uuid4())
-        result.tool_registry = discover_tools()
-        return result
+        return analyze_summary_stats_workflow(
+            str(durable_path),
+            filename,
+            genome_build=genome_build,
+            trait_type=trait_type,
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Summary statistics intake failed: {exc}") from exc
+
+
+@app.post("/api/v1/source/upload", response_model=SourceReadyResponse)
+async def upload_active_source(file: UploadFile = File(...)) -> SourceReadyResponse:
+    filename = file.filename or "upload.dat"
+
+    if _is_raw_qc_filename(filename):
+        suffixes = "".join(Path(filename).suffixes) or Path(filename).suffix or ".dat"
+        RAW_QC_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in Path(filename).stem)
+        durable_path = RAW_QC_UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}_{safe_stem}{suffixes}"
+        durable_path.write_bytes(await file.read())
+        file_kind = Path(filename).suffix.lower().lstrip(".") or "raw"
+        return SourceReadyResponse(
+            source_type="raw_qc",
+            file_name=filename,
+            source_path=str(durable_path),
+            file_kind=file_kind.upper(),
+        )
+
+    if _is_summary_stats_filename(filename) and not filename.lower().endswith((".vcf", ".vcf.gz")):
+        suffixes = "".join(Path(filename).suffixes) or Path(filename).suffix or ".tsv"
+        SUMMARY_STATS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in Path(filename).stem)
+        durable_path = SUMMARY_STATS_UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}_{safe_stem}{suffixes}"
+        durable_path.write_bytes(await file.read())
+        return SourceReadyResponse(
+            source_type="summary_stats",
+            file_name=filename,
+            source_path=str(durable_path),
+        )
+
+    suffixes = Path(filename).suffixes
+    combined_suffix = "".join(suffixes) or Path(filename).suffix or ".vcf"
+    if not (combined_suffix.endswith(".vcf") or combined_suffix.endswith(".vcf.gz")):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported source type. Upload a VCF, raw sequencing file, or summary statistics file.",
+        )
+    ANALYSIS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in Path(filename).stem)
+    durable_path = ANALYSIS_UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}_{safe_stem}{combined_suffix}"
+    durable_path.write_bytes(await file.read())
+    return SourceReadyResponse(
+        source_type="vcf",
+        file_name=filename,
+        source_path=str(durable_path),
+    )
 
 
 @app.post("/api/v1/summary-stats/rows", response_model=SummaryStatsRowsResponse)

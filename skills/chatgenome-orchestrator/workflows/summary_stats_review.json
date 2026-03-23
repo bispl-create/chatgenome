@@ -1,0 +1,15 @@
+{
+  "name": "summary_stats_review",
+  "description": "Run the default summary statistics intake and review workflow on the active summary-statistics source.",
+  "source_type": "summary_stats",
+  "steps": [
+    "summary_stats_intake",
+    "summary_stats_qc",
+    "grounded_summary_tool"
+  ],
+  "default_view": "sumstats",
+  "notes": [
+    "The summary-statistics intake and QC steps are currently implemented inside the upload/runtime layer rather than as standalone registered plugins.",
+    "This workflow definition is the target orchestration shape for future @skill execution."
+  ]
+}

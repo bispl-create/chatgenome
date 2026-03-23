@@ -1,0 +1,13 @@
+{
+  "name": "raw_qc_review",
+  "description": "Run the default raw sequencing QC workflow on the active FASTQ, BAM, or SAM source.",
+  "source_type": "raw_qc",
+  "steps": [
+    "fastqc_execution_tool"
+  ],
+  "default_view": "rawqc",
+  "notes": [
+    "This workflow establishes the initial FastQC review state for raw sequencing inputs.",
+    "Post-alignment review remains available separately through @samtools on compatible active sources."
+  ]
+}

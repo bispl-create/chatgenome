@@ -32,9 +32,11 @@ from app.services.ldblockshow import run_ldblockshow
 from app.services.plink import run_plink
 from app.services.samtools import run_samtools
 from app.services.snpeff import run_snpeff
+from app.services.workflows import analyze_raw_qc_workflow, analyze_summary_stats_workflow, analyze_vcf_workflow
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 PLUGINS_DIR = ROOT_DIR / "plugins"
+WORKFLOWS_DIR = ROOT_DIR / "skills" / "chatgenome-orchestrator" / "workflows"
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "45"))
 
 
@@ -42,6 +44,19 @@ OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "45"))
 def _load_tool_manifests() -> list[dict[str, object]]:
     manifests: list[dict[str, object]] = []
     for manifest in sorted(PLUGINS_DIR.glob("*/tool.json")):
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            manifests.append(payload)
+    return manifests
+
+
+@lru_cache(maxsize=1)
+def _load_workflow_manifests() -> list[dict[str, object]]:
+    manifests: list[dict[str, object]] = []
+    for manifest in sorted(WORKFLOWS_DIR.glob("*.json")):
         try:
             payload = json.loads(manifest.read_text(encoding="utf-8"))
         except Exception:
@@ -72,43 +87,14 @@ def _tool_aliases(manifest: dict[str, object]) -> list[str]:
     return sorted(aliases)
 
 
-def _load_direct_tool_routing_specs() -> list[dict[str, object]]:
-    specs: list[dict[str, object]] = []
-    for tool_name in (
-        "ldblockshow_execution_tool",
-        "snpeff_execution_tool",
-    ):
-        manifest = PLUGINS_DIR / tool_name / "tool.json"
-        try:
-            payload = json.loads(manifest.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        routing = payload.get("routing")
-        if isinstance(routing, dict):
-            specs.append({"name": payload.get("name", tool_name), "routing": routing})
-    return specs
-
-
-def _match_direct_tool_request(question: str) -> dict[str, object] | None:
-    lowered = question.lower()
-    for spec in _load_direct_tool_routing_specs():
-        routing = spec.get("routing") or {}
-        trigger_keywords = [str(item).lower() for item in routing.get("trigger_keywords", [])]
-        execution_intents = [str(item).lower() for item in routing.get("execution_intents", [])]
-        if not any(keyword in lowered for keyword in trigger_keywords):
-            continue
-        if execution_intents and not any(intent in lowered for intent in execution_intents):
-            continue
-        return spec
-    return None
-
-
 def _parse_at_tool_request(question: str) -> dict[str, object] | None:
     stripped = question.strip()
     match = re.match(r"^@([A-Za-z0-9_-]+)(?:\s+(.*))?$", stripped, flags=re.DOTALL)
     if not match:
         return None
     alias = match.group(1).strip().lower()
+    if alias == "skill":
+        return None
     remainder = (match.group(2) or "").strip()
     for manifest in _load_tool_manifests():
         if alias in _tool_aliases(manifest):
@@ -124,6 +110,34 @@ def _parse_at_tool_request(question: str) -> dict[str, object] | None:
         "alias": alias,
         "remainder": remainder,
         "is_help": False,
+    }
+
+
+def _parse_skill_request(question: str) -> dict[str, object] | None:
+    stripped = question.strip()
+    match = re.match(r"^@skill(?:\s+(.*))?$", stripped, flags=re.DOTALL | re.IGNORECASE)
+    if not match:
+        return None
+    remainder = (match.group(1) or "").strip()
+    lowered = remainder.lower()
+    if not remainder or lowered in {"help", "--help", "-h"}:
+        return {"name": None, "remainder": remainder, "is_help": True, "manifest": None}
+    workflow_name = remainder.split()[0].strip()
+    is_help = remainder.lower().endswith(" help")
+    target_name = workflow_name
+    manifest = next(
+        (
+            item
+            for item in _load_workflow_manifests()
+            if str(item.get("name") or "").strip().lower() == workflow_name.lower()
+        ),
+        None,
+    )
+    return {
+        "name": target_name,
+        "remainder": remainder,
+        "is_help": is_help,
+        "manifest": manifest,
     }
 
 
@@ -186,6 +200,51 @@ def _render_tool_help(manifest: dict[str, object]) -> str:
         lines.append("")
         lines.append(f"Aliases: {aliases}")
     return "\n".join(lines).strip()
+
+
+def _render_skill_help(source_type: str | None = None, selected: dict[str, object] | None = None) -> str:
+    manifests = _load_workflow_manifests()
+    if source_type:
+        manifests = [item for item in manifests if str(item.get("source_type") or "").strip().lower() == source_type.lower()]
+    if selected is not None:
+        manifests = [selected]
+    if not manifests:
+        return "No workflow registry entries are available for the current source."
+    tool_lookup = {
+        str(item.get("name") or "").strip(): item
+        for item in _load_tool_manifests()
+        if isinstance(item, dict)
+    }
+    lines: list[str] = ["**Workflow registry**", ""]
+    for item in manifests:
+        name = str(item.get("name") or "workflow")
+        description = str(item.get("description") or "").strip()
+        lines.append(f"- `@skill {name}`: {description}")
+        if selected is not None:
+            steps = item.get("steps") or []
+            if isinstance(steps, list) and steps:
+                lines.append("")
+                lines.append("Steps")
+                for step in steps:
+                    step_name = str(step).strip()
+                    manifest = tool_lookup.get(step_name)
+                    if manifest is not None:
+                        step_description = str(manifest.get("description") or "").strip()
+                        lines.append(f"- `{step_name}`: {step_description}")
+                    else:
+                        lines.append(f"- `{step_name}`")
+    lines.append("")
+    lines.append("Examples")
+    if source_type == "vcf":
+        lines.append("- `@skill representative_vcf_review`")
+    elif source_type == "raw_qc":
+        lines.append("- `@skill raw_qc_review`")
+    elif source_type == "summary_stats":
+        lines.append("- `@skill summary_stats_review`")
+    else:
+        lines.append("- `@skill help`")
+        lines.append("- `@skill representative_vcf_review`")
+    return "\n".join(lines)
 
 
 def _is_korean(text: str) -> bool:
@@ -542,6 +601,10 @@ def _handle_analysis_at_tool_request(payload: AnalysisChatRequest, tool_request:
         return _handle_liftover_request(payload, remainder=remainder)
     if name == "plink_execution_tool":
         return _handle_plink_request(payload)
+    if name == "snpeff_execution_tool":
+        return _handle_snpeff_request(payload)
+    if name == "ldblockshow_execution_tool":
+        return _handle_ldblockshow_request(payload)
     if name == "samtools_execution_tool":
         return AnalysisChatResponse(
             answer="`@samtools` uses the active BAM/SAM/CRAM source. Run it from a raw-QC/alignment session rather than a VCF session.",
@@ -549,6 +612,49 @@ def _handle_analysis_at_tool_request(payload: AnalysisChatRequest, tool_request:
             used_fallback=False,
         )
     return None
+
+
+def _handle_analysis_skill_request(payload: AnalysisChatRequest, skill_request: dict[str, object]) -> AnalysisChatResponse:
+    manifest = skill_request.get("manifest")
+    if skill_request.get("is_help") and manifest is None:
+        return AnalysisChatResponse(answer=_render_skill_help("vcf"), citations=[], used_fallback=False)
+    if manifest is None:
+        name = str(skill_request.get("name") or "workflow")
+        return AnalysisChatResponse(
+            answer=f"`@skill {name}` is not a registered workflow for the current build.",
+            citations=[],
+            used_fallback=False,
+        )
+    if skill_request.get("is_help"):
+        return AnalysisChatResponse(answer=_render_skill_help("vcf", selected=manifest), citations=[], used_fallback=False)
+    workflow_name = str(manifest.get("name") or "")
+    if workflow_name == "representative_vcf_review":
+        source_vcf_path = payload.analysis.source_vcf_path
+        if not source_vcf_path:
+            return AnalysisChatResponse(
+                answer="The active analysis does not expose a source VCF path, so this workflow cannot be rerun from chat.",
+                citations=[],
+                used_fallback=False,
+            )
+        refreshed = analyze_vcf_workflow(source_vcf_path, annotation_scope="representative", annotation_limit=None)
+        return AnalysisChatResponse(
+            answer=(
+                "The representative VCF review workflow was rerun on the active source.\n\n"
+                f"- Workflow: `{workflow_name}`\n"
+                f"- Active file: `{refreshed.facts.file_name}`\n"
+                f"- Logged tools: {', '.join(refreshed.used_tools or []) or 'none'}\n"
+                f"- Candidate variants: {len(refreshed.candidate_variants or [])}\n\n"
+                "The active VCF analysis state has been refreshed. Open Studio cards or ask follow-up questions. Use `$studio ...` if you want the answer grounded in the current VCF review state."
+            ),
+            citations=[],
+            used_fallback=False,
+            analysis=refreshed,
+        )
+    return AnalysisChatResponse(
+        answer=f"`@skill {workflow_name}` is registered but not yet executable in analysis chat.",
+        citations=[],
+        used_fallback=False,
+    )
 
 
 def _handle_raw_qc_at_tool_request(payload: RawQcChatRequest, tool_request: dict[str, object]) -> RawQcChatResponse:
@@ -615,6 +721,50 @@ def _handle_raw_qc_at_tool_request(payload: RawQcChatRequest, tool_request: dict
         citations=[],
         used_fallback=False,
         samtools_result=result,
+    )
+
+
+def _handle_raw_qc_skill_request(payload: RawQcChatRequest, skill_request: dict[str, object]) -> RawQcChatResponse:
+    manifest = skill_request.get("manifest")
+    if skill_request.get("is_help") and manifest is None:
+        return RawQcChatResponse(answer=_render_skill_help("raw_qc"), citations=[], used_fallback=False)
+    if manifest is None:
+        name = str(skill_request.get("name") or "workflow")
+        return RawQcChatResponse(
+            answer=f"`@skill {name}` is not a registered workflow for the current build.",
+            citations=[],
+            used_fallback=False,
+        )
+    if skill_request.get("is_help"):
+        return RawQcChatResponse(answer=_render_skill_help("raw_qc", selected=manifest), citations=[], used_fallback=False)
+    workflow_name = str(manifest.get("name") or "")
+    if workflow_name == "raw_qc_review":
+        source_raw_path = payload.analysis.source_raw_path
+        if not source_raw_path:
+            return RawQcChatResponse(
+                answer="The active raw-QC session does not expose a durable source file path, so this workflow cannot be rerun from chat.",
+                citations=[],
+                used_fallback=False,
+            )
+        refreshed = analyze_raw_qc_workflow(source_raw_path, payload.analysis.facts.file_name)
+        return RawQcChatResponse(
+            answer=(
+                "The raw_qc_review workflow was rerun on the active source.\n\n"
+                f"- Workflow: `{workflow_name}`\n"
+                f"- Active file: `{refreshed.facts.file_name}`\n"
+                f"- Logged tools: {', '.join(refreshed.used_tools or []) or 'none'}\n"
+                f"- Modules: {len(refreshed.modules)}\n\n"
+                "The raw-QC state has been refreshed. Use `@samtools` for additional alignment review on compatible sources, or `$studio ...` for grounded explanation of the current Studio state."
+            ),
+            citations=[],
+            used_fallback=False,
+            requested_view="rawqc",
+            analysis=refreshed,
+        )
+    return RawQcChatResponse(
+        answer=f"`@skill {workflow_name}` is registered but not yet executable in raw-QC chat.",
+        citations=[],
+        used_fallback=False,
     )
 
 
@@ -769,6 +919,18 @@ def answer_analysis_chat(payload: AnalysisChatRequest) -> AnalysisChatResponse:
             used_fallback=False,
         )
 
+    skill_request = _parse_skill_request(payload.question)
+    if skill_request:
+        try:
+            return _handle_analysis_skill_request(payload, skill_request)
+        except Exception as exc:
+            name = str(skill_request.get("name") or "workflow")
+            return AnalysisChatResponse(
+                answer=f"`@skill {name}` execution failed: {exc}",
+                citations=[],
+                used_fallback=True,
+            )
+
     at_tool_request = _parse_at_tool_request(payload.question)
     if at_tool_request:
         try:
@@ -783,7 +945,6 @@ def answer_analysis_chat(payload: AnalysisChatRequest) -> AnalysisChatResponse:
                 used_fallback=True,
             )
 
-    direct_tool = _match_direct_tool_request(payload.question)
     lowered_question = payload.question.lower()
 
     if "opencravat" in lowered_question or "open cravat" in lowered_question:
@@ -798,38 +959,6 @@ def answer_analysis_chat(payload: AnalysisChatRequest) -> AnalysisChatResponse:
             used_fallback=False,
             used_tools=[],
         )
-
-    if direct_tool and direct_tool.get("name") == "ldblockshow_execution_tool":
-        try:
-            return _handle_ldblockshow_request(payload)
-        except Exception as exc:
-            region = _extract_ldblockshow_region(payload.question) or "unknown"
-            return AnalysisChatResponse(
-                answer=f"LDBlockShow execution failed: {exc}",
-                citations=[],
-                used_fallback=True,
-                used_tools=["ldblockshow_execution_tool"],
-                ldblockshow_result=LDBlockShowResponse(
-                    tool="ldblockshow",
-                    input_path=payload.analysis.source_vcf_path or "",
-                    region=region,
-                    output_prefix="",
-                    command_preview="LDBlockShow -InVCF <source.vcf.gz> -Region chr:start:end ...",
-                    attempted_regions=[region] if region != "unknown" else [],
-                    warnings=[str(exc)],
-                ),
-            )
-
-    if direct_tool and direct_tool.get("name") == "snpeff_execution_tool":
-        try:
-            return _handle_snpeff_request(payload)
-        except Exception as exc:
-            return AnalysisChatResponse(
-                answer=f"SnpEff execution failed: {exc}",
-                citations=[],
-                used_fallback=True,
-                used_tools=["snpeff_execution_tool"],
-            )
 
     try:
         return _call_openai(payload)
@@ -853,6 +982,18 @@ def answer_raw_qc_chat(payload: RawQcChatRequest) -> RawQcChatResponse:
             citations=[],
             used_fallback=False,
         )
+
+    skill_request = _parse_skill_request(payload.question)
+    if skill_request:
+        try:
+            return _handle_raw_qc_skill_request(payload, skill_request)
+        except Exception as exc:
+            name = str(skill_request.get("name") or "workflow")
+            return RawQcChatResponse(
+                answer=f"`@skill {name}` execution failed: {exc}",
+                citations=[],
+                used_fallback=True,
+            )
 
     at_tool_request = _parse_at_tool_request(payload.question)
     if at_tool_request:
@@ -950,6 +1091,67 @@ def answer_summary_stats_chat(payload: SummaryStatsChatRequest) -> SummaryStatsC
             citations=[],
             used_fallback=False,
         )
+
+    skill_request = _parse_skill_request(payload.question)
+    if skill_request:
+        try:
+            manifest = skill_request.get("manifest")
+            if skill_request.get("is_help") and manifest is None:
+                return SummaryStatsChatResponse(answer=_render_skill_help("summary_stats"), citations=[], used_fallback=False)
+            if manifest is None:
+                name = str(skill_request.get("name") or "workflow")
+                return SummaryStatsChatResponse(
+                    answer=f"`@skill {name}` is not a registered workflow for the current build.",
+                    citations=[],
+                    used_fallback=False,
+                )
+            if skill_request.get("is_help"):
+                return SummaryStatsChatResponse(
+                    answer=_render_skill_help("summary_stats", selected=manifest),
+                    citations=[],
+                    used_fallback=False,
+                )
+            workflow_name = str(manifest.get("name") or "")
+            if workflow_name == "summary_stats_review":
+                source_stats_path = payload.analysis.source_stats_path
+                if not source_stats_path:
+                    return SummaryStatsChatResponse(
+                        answer="The active summary-statistics session does not expose a durable source file path, so this workflow cannot be rerun from chat.",
+                        citations=[],
+                        used_fallback=False,
+                    )
+                refreshed = analyze_summary_stats_workflow(
+                    source_stats_path,
+                    payload.analysis.file_name,
+                    genome_build=payload.analysis.genome_build,
+                    trait_type=payload.analysis.trait_type,
+                )
+                return SummaryStatsChatResponse(
+                    answer=(
+                        "The summary_stats_review workflow was rerun on the active source.\n\n"
+                        f"- Workflow: `{workflow_name}`\n"
+                        f"- Active file: `{refreshed.file_name}`\n"
+                        f"- Rows detected: {refreshed.row_count}\n"
+                        f"- Auto-mapped fields: {sum(1 for value in refreshed.mapped_fields.model_dump().values() if value)}\n\n"
+                        "The Summary Statistics Review state has been refreshed. Use `$studio ...` for grounded explanation of the current review state, or ask for a downstream workflow such as PRS preparation."
+                    ),
+                    citations=[],
+                    used_fallback=False,
+                    requested_view="sumstats",
+                    analysis=refreshed,
+                )
+            return SummaryStatsChatResponse(
+                answer=f"`@skill {workflow_name}` is registered but not yet executable in summary-statistics chat.",
+                citations=[],
+                used_fallback=False,
+            )
+        except Exception as exc:
+            name = str(skill_request.get("name") or "workflow")
+            return SummaryStatsChatResponse(
+                answer=f"`@skill {name}` execution failed: {exc}",
+                citations=[],
+                used_fallback=True,
+            )
 
     api_key = os.getenv("OPENAI_API_KEY")
     model = os.getenv("OPENAI_MODEL", "gpt-5-mini")

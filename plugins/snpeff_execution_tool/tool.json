@@ -27,5 +27,36 @@
     "requires_gpu": false,
     "allow_cpu_fallback": true,
     "estimated_runtime_sec": 8
+  },
+  "help": {
+    "summary": "Run local SnpEff effect annotation on the active VCF source and preview annotated ANN records.",
+    "modes": [
+      {
+        "name": "run",
+        "description": "Run the curated SnpEff annotation workflow for the current VCF."
+      }
+    ],
+    "options": [
+      {
+        "name": "genome",
+        "type": "string",
+        "required": false,
+        "description": "Optional SnpEff genome database key. ChatGenome usually derives this from the VCF build guess."
+      },
+      {
+        "name": "output_prefix",
+        "type": "string",
+        "required": false,
+        "description": "Optional prefix for generated SnpEff artifacts."
+      }
+    ],
+    "examples": [
+      "@snpeff",
+      "@snpeff help"
+    ],
+    "notes": [
+      "Uses the active VCF source by default.",
+      "Intended as an on-demand annotation preview rather than a general natural-language trigger."
+    ]
   }
 }

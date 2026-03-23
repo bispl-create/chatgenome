@@ -27,5 +27,30 @@
     "requires_gpu": false,
     "allow_cpu_fallback": true,
     "estimated_runtime_sec": 6
+  },
+  "help": {
+    "summary": "Run LDBlockShow on the active VCF source for a requested locus and generate LD heatmap artifacts.",
+    "modes": [
+      {
+        "name": "run",
+        "description": "Generate the curated LD block visualization for a specific genomic region."
+      }
+    ],
+    "options": [
+      {
+        "name": "region",
+        "type": "string",
+        "required": true,
+        "description": "Genomic region in chr:start:end format."
+      }
+    ],
+    "examples": [
+      "@ldblockshow chr11:24100000:24200000",
+      "@ldblockshow help"
+    ],
+    "notes": [
+      "Uses the active VCF source by default.",
+      "A concrete region is required for execution."
+    ]
   }
 }
