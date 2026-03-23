@@ -27,5 +27,45 @@
     "requires_gpu": false,
     "allow_cpu_fallback": true,
     "estimated_runtime_sec": 20
+  },
+  "help": {
+    "summary": "Lift the current active VCF from one genome build to another with GATK LiftoverVcf.",
+    "modes": [
+      {
+        "name": "run",
+        "description": "Run genome-build conversion on the active VCF source."
+      }
+    ],
+    "options": [
+      {
+        "name": "target",
+        "type": "string",
+        "required": false,
+        "default": "hg38",
+        "description": "Target genome build for the lifted VCF. ChatGenome currently curates hg38/GRCh38 as the primary target."
+      },
+      {
+        "name": "source_build",
+        "type": "string",
+        "required": false,
+        "description": "Optional source build override if the current build guess is incorrect."
+      },
+      {
+        "name": "output_prefix",
+        "type": "string",
+        "required": false,
+        "description": "Optional prefix for the lifted and rejected VCF outputs."
+      }
+    ],
+    "examples": [
+      "@liftover help",
+      "@liftover",
+      "@liftover target=hg38",
+      "@liftover target=hg38 source_build=hg19"
+    ],
+    "notes": [
+      "Uses the active VCF source by default.",
+      "Writes both lifted records and rejected records."
+    ]
   }
 }

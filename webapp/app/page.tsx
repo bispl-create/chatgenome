@@ -762,6 +762,35 @@ function hasMeaningfulText(value: string) {
   return Boolean(trimmed && trimmed !== "." && trimmed.toLowerCase() !== "not available");
 }
 
+const groundingTokens = ["$studio", "$current analysis", "$current card", "$grounded"];
+
+function detectToolTriggers(text: string): string[] {
+  return Array.from(new Set(Array.from(text.matchAll(/(^|\s)(@[A-Za-z0-9_-]+)/g)).map((match) => match[2])));
+}
+
+function renderUserPromptInline(content: string) {
+  const tokenPattern = /(\$studio|\$current analysis|\$current card|\$grounded|@[A-Za-z0-9_-]+)/gi;
+  const parts = content.split(tokenPattern);
+  return parts.map((part, index) => {
+    const lowered = part.toLowerCase();
+    if (groundingTokens.includes(lowered)) {
+      return (
+        <span key={`user-token-${index}`} className="inlineTriggerChip">
+          {part}
+        </span>
+      );
+    }
+    if (/^@[A-Za-z0-9_-]+$/.test(part)) {
+      return (
+        <span key={`user-tool-${index}`} className="inlineToolChip">
+          {part}
+        </span>
+      );
+    }
+    return <span key={`user-text-${index}`}>{part}</span>;
+  });
+}
+
 export default function Page() {
   const [apiBase, setApiBase] = useState("http://127.0.0.1:8001");
   const [toolRegistry, setToolRegistry] = useState<AnalysisResponse["tool_registry"]>([]);
@@ -830,9 +859,16 @@ export default function Page() {
     }
     return `plink2 --vcf ${inputPath} dosage=DS ${flags.join(" ")} --out ${outputPrefix}`.trim();
   }, [analysis, plinkConfig]);
-  const groundingTokens = ["$studio", "$current analysis", "$current card", "$grounded"];
   const normalizedComposerText = typeof composerText === "string" ? composerText.toLowerCase() : "";
   const detectedGroundingTriggers = groundingTokens.filter((token) => normalizedComposerText.includes(token));
+  const detectedToolTriggers = detectToolTriggers(composerText);
+  const composerInputClass = [
+    "composerInput",
+    detectedGroundingTriggers.length ? "composerInputTriggered" : "",
+    detectedToolTriggers.length ? "composerInputToolTriggered" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   useEffect(() => {
     if (!analysis) {
@@ -2016,7 +2052,7 @@ export default function Page() {
                     className={turn.role === "user" ? "nbUserPrompt" : "nbAssistantAnswer"}
                   >
                     {turn.role === "user" ? (
-                      <p className="summaryText nbAnswerText">{turn.content}</p>
+                      <p className="summaryText nbAnswerText">{renderUserPromptInline(turn.content)}</p>
                     ) : (
                       <MarkdownAnswer content={turn.content} />
                     )}
@@ -2032,7 +2068,7 @@ export default function Page() {
 
             <div className="chatComposerDock">
               <input
-                className={detectedGroundingTriggers.length ? "composerInput composerInputTriggered" : "composerInput"}
+                className={composerInputClass}
                 value={composerText}
                 onChange={(event) => setComposerText(event.target.value)}
                 onCompositionStart={() => setIsComposing(true)}
@@ -2056,13 +2092,19 @@ export default function Page() {
                 →
               </button>
             </div>
-            {detectedGroundingTriggers.length ? (
+            {detectedGroundingTriggers.length || detectedToolTriggers.length ? (
               <div className="composerTriggerBar">
-                <span className="composerTriggerLabel">Grounded mode</span>
+                {detectedGroundingTriggers.length ? <span className="composerTriggerLabel">Grounded mode</span> : null}
                 {detectedGroundingTriggers.map((token) => (
                   <span key={token} className="composerTriggerChip">
                     {token}
                   </span>
+                ))}
+                {detectedToolTriggers.length ? <span className="composerTriggerLabel">Tool mode</span> : null}
+                {detectedToolTriggers.map((token) => (
+                  <button key={token} type="button" className="composerToolChip" tabIndex={-1}>
+                    {token}
+                  </button>
                 ))}
               </div>
             ) : null}

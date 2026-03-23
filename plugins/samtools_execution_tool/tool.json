@@ -27,5 +27,53 @@
     "requires_gpu": false,
     "allow_cpu_fallback": true,
     "estimated_runtime_sec": 8
+  },
+  "help": {
+    "summary": "Run curated samtools alignment-QC commands on the active BAM, SAM, or CRAM source.",
+    "modes": [
+      {
+        "name": "qc",
+        "description": "Run quickcheck, general stats, and idxstats-style review for the active alignment file."
+      }
+    ],
+    "options": [
+      {
+        "name": "mode",
+        "type": "string",
+        "required": false,
+        "default": "qc",
+        "description": "Workflow mode. The current ChatGenome build supports the qc preset."
+      },
+      {
+        "name": "quickcheck",
+        "type": "boolean",
+        "required": false,
+        "default": true,
+        "description": "Check whether the alignment file is structurally readable."
+      },
+      {
+        "name": "stats",
+        "type": "boolean",
+        "required": false,
+        "default": true,
+        "description": "Generate general alignment statistics summary."
+      },
+      {
+        "name": "idxstats",
+        "type": "boolean",
+        "required": false,
+        "default": true,
+        "description": "Report mapped and unmapped counts by contig when indexing information is available."
+      }
+    ],
+    "examples": [
+      "@samtools help",
+      "@samtools",
+      "@samtools mode=qc"
+    ],
+    "notes": [
+      "Uses the active BAM, SAM, or CRAM source by default.",
+      "Some summaries depend on index availability."
+    ]
   }
 }

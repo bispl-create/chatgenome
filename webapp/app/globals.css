@@ -256,6 +256,14 @@ input {
   font-weight: 700;
 }
 
+.composerInputToolTriggered {
+  border-color: rgba(42, 96, 178, 0.55);
+  box-shadow: 0 0 0 3px rgba(42, 96, 178, 0.14);
+  background: linear-gradient(180deg, #fbfcff, #eef4ff);
+  color: #173f7a;
+  font-weight: 700;
+}
+
 .composerTriggerBar {
   display: flex;
   align-items: center;
@@ -280,6 +288,44 @@ input {
   font-family: "SFMono-Regular", Menlo, monospace;
   font-weight: 700;
   font-size: 0.88rem;
+}
+
+.composerToolChip,
+.inlineToolChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(42, 96, 178, 0.28);
+  background: linear-gradient(180deg, #eef4ff, #dfeaff);
+  color: #1f4f98;
+  font-family: "SFMono-Regular", Menlo, monospace;
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+
+.composerToolChip {
+  cursor: default;
+  box-shadow: 0 8px 20px rgba(42, 96, 178, 0.12);
+}
+
+.inlineTriggerChip,
+.inlineToolChip {
+  margin: 0 0.18rem;
+  vertical-align: baseline;
+}
+
+.inlineTriggerChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(34, 63, 88, 0.18);
+  background: rgba(34, 63, 88, 0.1);
+  color: var(--accent);
+  font-family: "SFMono-Regular", Menlo, monospace;
+  font-weight: 700;
+  font-size: 0.88em;
 }
 
 select {

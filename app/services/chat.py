@@ -4,6 +4,7 @@ import json
 import os
 import re
 import urllib.request
+from functools import lru_cache
 from pathlib import Path
 
 from app.models import (
@@ -34,14 +35,47 @@ from app.services.snpeff import run_snpeff
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 PLUGINS_DIR = ROOT_DIR / "plugins"
+OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "45"))
+
+
+@lru_cache(maxsize=1)
+def _load_tool_manifests() -> list[dict[str, object]]:
+    manifests: list[dict[str, object]] = []
+    for manifest in sorted(PLUGINS_DIR.glob("*/tool.json")):
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            manifests.append(payload)
+    return manifests
+
+
+def _tool_aliases(manifest: dict[str, object]) -> list[str]:
+    aliases: set[str] = set()
+    name = str(manifest.get("name") or "").strip().lower()
+    if name:
+        aliases.add(name)
+        simplified = re.sub(r"^(gatk_|bcftools_)", "", name)
+        simplified = re.sub(r"_(execution|vcf|tool)$", "", simplified)
+        simplified = re.sub(r"_+", "_", simplified).strip("_")
+        if simplified:
+            aliases.add(simplified)
+            aliases.add(simplified.replace("_", ""))
+            aliases.add(simplified.replace("_", "-"))
+    routing = manifest.get("routing")
+    if isinstance(routing, dict):
+        for keyword in routing.get("trigger_keywords", []):
+            text = str(keyword).strip().lower()
+            if text and re.fullmatch(r"[a-z0-9_-]+", text):
+                aliases.add(text)
+    return sorted(aliases)
 
 
 def _load_direct_tool_routing_specs() -> list[dict[str, object]]:
     specs: list[dict[str, object]] = []
     for tool_name in (
-        "gatk_liftover_vcf_tool",
         "ldblockshow_execution_tool",
-        "plink_execution_tool",
         "snpeff_execution_tool",
     ):
         manifest = PLUGINS_DIR / tool_name / "tool.json"
@@ -67,6 +101,91 @@ def _match_direct_tool_request(question: str) -> dict[str, object] | None:
             continue
         return spec
     return None
+
+
+def _parse_at_tool_request(question: str) -> dict[str, object] | None:
+    stripped = question.strip()
+    match = re.match(r"^@([A-Za-z0-9_-]+)(?:\s+(.*))?$", stripped, flags=re.DOTALL)
+    if not match:
+        return None
+    alias = match.group(1).strip().lower()
+    remainder = (match.group(2) or "").strip()
+    for manifest in _load_tool_manifests():
+        if alias in _tool_aliases(manifest):
+            lowered = remainder.lower()
+            return {
+                "manifest": manifest,
+                "alias": alias,
+                "remainder": remainder,
+                "is_help": lowered in {"help", "--help", "-h"} or lowered.startswith("help "),
+            }
+    return {
+        "manifest": None,
+        "alias": alias,
+        "remainder": remainder,
+        "is_help": False,
+    }
+
+
+def _render_tool_help(manifest: dict[str, object]) -> str:
+    name = str(manifest.get("name") or "tool")
+    help_block = manifest.get("help")
+    if not isinstance(help_block, dict):
+        aliases = ", ".join(f"@{item}" for item in _tool_aliases(manifest)[:4])
+        return (
+            f"`{name}` is registered, but no curated help metadata is available yet.\n\n"
+            f"- Try one of these aliases: {aliases or '@tool'}"
+        )
+    lines: list[str] = []
+    summary = str(help_block.get("summary") or "").strip()
+    if summary:
+        lines.append(f"**{name}**")
+        lines.append("")
+        lines.append(summary)
+    modes = help_block.get("modes") or []
+    if isinstance(modes, list) and modes:
+        lines.append("")
+        lines.append("Available modes")
+        for mode in modes:
+            if isinstance(mode, dict):
+                mode_name = str(mode.get("name") or "").strip()
+                mode_description = str(mode.get("description") or "").strip()
+                if mode_name:
+                    lines.append(f"- `{mode_name}`: {mode_description}")
+    options = help_block.get("options") or []
+    if isinstance(options, list) and options:
+        lines.append("")
+        lines.append("Options")
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            option_name = str(option.get("name") or "").strip()
+            option_type = str(option.get("type") or "").strip()
+            option_description = str(option.get("description") or "").strip()
+            default = option.get("default")
+            default_suffix = f" Default: `{default}`." if default not in (None, "") else ""
+            if option_name:
+                label = f"`{option_name}`"
+                if option_type:
+                    label += f" ({option_type})"
+                lines.append(f"- {label}: {option_description}{default_suffix}")
+    examples = help_block.get("examples") or []
+    if isinstance(examples, list) and examples:
+        lines.append("")
+        lines.append("Examples")
+        for example in examples:
+            lines.append(f"- `{example}`")
+    notes = help_block.get("notes") or []
+    if isinstance(notes, list) and notes:
+        lines.append("")
+        lines.append("Notes")
+        for note in notes:
+            lines.append(f"- {note}")
+    aliases = ", ".join(f"@{item}" for item in _tool_aliases(manifest)[:4])
+    if aliases:
+        lines.append("")
+        lines.append(f"Aliases: {aliases}")
+    return "\n".join(lines).strip()
 
 
 def _is_korean(text: str) -> bool:
@@ -288,7 +407,7 @@ def _call_openai(payload: AnalysisChatRequest) -> AnalysisChatResponse:
         data=json.dumps(body).encode("utf-8"),
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "20"))) as response:
+    with urllib.request.urlopen(request, timeout=OPENAI_TIMEOUT_SECONDS) as response:
         result = json.loads(response.read().decode("utf-8"))
 
     output_text = result.get("output_text")
@@ -336,7 +455,14 @@ def _extract_liftover_target_build(question: str, build_guess: str | None) -> tu
     return "GRCh38", "hg38"
 
 
-def _handle_liftover_request(payload: AnalysisChatRequest) -> AnalysisChatResponse:
+def _extract_key_value_options(text: str) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for key, value in re.findall(r"([A-Za-z_][A-Za-z0-9_-]*)=([A-Za-z0-9._:-]+)", text):
+        options[key.lower()] = value
+    return options
+
+
+def _handle_liftover_request(payload: AnalysisChatRequest, *, remainder: str = "") -> AnalysisChatResponse:
     source_vcf_path = payload.analysis.source_vcf_path
     if not source_vcf_path:
         return AnalysisChatResponse(
@@ -346,10 +472,13 @@ def _handle_liftover_request(payload: AnalysisChatRequest) -> AnalysisChatRespon
             used_tools=["gatk_liftover_vcf_tool"],
         )
 
+    options = _extract_key_value_options(remainder)
     target_build, target_label = _extract_liftover_target_build(
-        payload.question,
+        options.get("target") or payload.question,
         payload.analysis.facts.genome_build_guess,
     )
+    source_build = options.get("source_build") or payload.analysis.facts.genome_build_guess
+    output_prefix = options.get("output_prefix") or f"{payload.analysis.analysis_id}-liftover-{target_label}"
     existing = payload.analysis.liftover_result
     if existing is not None and (existing.target_build or "").lower() == target_build.lower():
         return AnalysisChatResponse(
@@ -372,9 +501,9 @@ def _handle_liftover_request(payload: AnalysisChatRequest) -> AnalysisChatRespon
             vcf_path=source_vcf_path,
             target_reference_fasta=str(DEFAULT_TARGET_FASTA),
             chain_file=str(DEFAULT_CHAIN_FILE),
-            source_build=payload.analysis.facts.genome_build_guess or None,
+            source_build=source_build or None,
             target_build=target_build,
-            output_prefix=f"{payload.analysis.analysis_id}-liftover-{target_label}",
+            output_prefix=output_prefix,
             parse_limit=8,
         )
     )
@@ -393,6 +522,99 @@ def _handle_liftover_request(payload: AnalysisChatRequest) -> AnalysisChatRespon
         used_fallback=False,
         used_tools=["gatk_liftover_vcf_tool"],
         liftover_result=result,
+    )
+
+
+def _handle_analysis_at_tool_request(payload: AnalysisChatRequest, tool_request: dict[str, object]) -> AnalysisChatResponse | None:
+    manifest = tool_request.get("manifest")
+    alias = str(tool_request.get("alias") or "")
+    remainder = str(tool_request.get("remainder") or "")
+    if manifest is None:
+        return AnalysisChatResponse(
+            answer=f"`@{alias}` is not a registered ChatGenome tool.",
+            citations=[],
+            used_fallback=False,
+        )
+    if bool(tool_request.get("is_help")):
+        return AnalysisChatResponse(answer=_render_tool_help(manifest), citations=[], used_fallback=False)
+    name = str(manifest.get("name") or "")
+    if name == "gatk_liftover_vcf_tool":
+        return _handle_liftover_request(payload, remainder=remainder)
+    if name == "plink_execution_tool":
+        return _handle_plink_request(payload)
+    if name == "samtools_execution_tool":
+        return AnalysisChatResponse(
+            answer="`@samtools` uses the active BAM/SAM/CRAM source. Run it from a raw-QC/alignment session rather than a VCF session.",
+            citations=[],
+            used_fallback=False,
+        )
+    return None
+
+
+def _handle_raw_qc_at_tool_request(payload: RawQcChatRequest, tool_request: dict[str, object]) -> RawQcChatResponse:
+    manifest = tool_request.get("manifest")
+    alias = str(tool_request.get("alias") or "")
+    if manifest is None:
+        return RawQcChatResponse(
+            answer=f"`@{alias}` is not a registered ChatGenome tool.",
+            citations=[],
+            used_fallback=False,
+        )
+    if bool(tool_request.get("is_help")):
+        return RawQcChatResponse(answer=_render_tool_help(manifest), citations=[], used_fallback=False)
+    name = str(manifest.get("name") or "")
+    if name != "samtools_execution_tool":
+        return RawQcChatResponse(
+            answer=f"`@{alias}` is not available for the current raw-QC source type.",
+            citations=[],
+            used_fallback=False,
+        )
+    alignment_kind = (payload.analysis.facts.file_kind or "").upper()
+    if alignment_kind not in {"BAM", "SAM", "CRAM", "ALIGNMENT"}:
+        return RawQcChatResponse(
+            answer=(
+                "samtools is intended for alignment files such as BAM, SAM, or CRAM. "
+                f"The current active source is `{payload.analysis.facts.file_name}` ({payload.analysis.facts.file_kind})."
+            ),
+            citations=[],
+            used_fallback=False,
+        )
+    raw_path = payload.analysis.source_raw_path
+    if not raw_path:
+        return RawQcChatResponse(
+            answer="The active raw-QC session does not include a durable alignment-file path, so `@samtools` cannot run yet.",
+            citations=[],
+            used_fallback=False,
+        )
+    result = run_samtools(
+        SamtoolsRequest(
+            raw_path=raw_path,
+            original_name=payload.analysis.facts.file_name,
+        )
+    )
+    idx_lines = [
+        f"- {item.contig}: mapped {item.mapped}, unmapped {item.unmapped}, length {item.length_bp}"
+        for item in result.idxstats_rows[:5]
+    ]
+    answer = (
+        f"samtools reviewed the active source `{result.display_name}` ({result.file_kind}).\n\n"
+        f"- Quickcheck: {'PASS' if result.quickcheck_ok else 'issue detected'}\n"
+        f"- Total reads: {result.total_reads if result.total_reads is not None else 'unknown'}\n"
+        f"- Mapped reads: {result.mapped_reads if result.mapped_reads is not None else 'unknown'}"
+        f"{f' ({result.mapped_rate:.2f}%)' if result.mapped_rate is not None else ''}\n"
+        f"- Properly paired reads: {result.properly_paired_reads if result.properly_paired_reads is not None else 'unknown'}"
+        f"{f' ({result.properly_paired_rate:.2f}%)' if result.properly_paired_rate is not None else ''}\n"
+        f"- Index path: {result.index_path or 'none'}\n\n"
+        "Top idxstats rows:\n"
+        f"{chr(10).join(idx_lines) if idx_lines else '- idxstats rows are not available for this input.'}"
+    )
+    if result.warnings:
+        answer += "\n\nWarnings:\n" + "\n".join(f"- {warning}" for warning in result.warnings[:5])
+    return RawQcChatResponse(
+        answer=answer,
+        citations=[],
+        used_fallback=False,
+        samtools_result=result,
     )
 
 
@@ -547,6 +769,20 @@ def answer_analysis_chat(payload: AnalysisChatRequest) -> AnalysisChatResponse:
             used_fallback=False,
         )
 
+    at_tool_request = _parse_at_tool_request(payload.question)
+    if at_tool_request:
+        try:
+            handled = _handle_analysis_at_tool_request(payload, at_tool_request)
+            if handled is not None:
+                return handled
+        except Exception as exc:
+            alias = str(at_tool_request.get("alias") or "tool")
+            return AnalysisChatResponse(
+                answer=f"`@{alias}` execution failed: {exc}",
+                citations=[],
+                used_fallback=True,
+            )
+
     direct_tool = _match_direct_tool_request(payload.question)
     lowered_question = payload.question.lower()
 
@@ -584,17 +820,6 @@ def answer_analysis_chat(payload: AnalysisChatRequest) -> AnalysisChatResponse:
                 ),
             )
 
-    if direct_tool and direct_tool.get("name") == "gatk_liftover_vcf_tool":
-        try:
-            return _handle_liftover_request(payload)
-        except Exception as exc:
-            return AnalysisChatResponse(
-                answer=f"GATK liftover execution failed: {exc}",
-                citations=[],
-                used_fallback=True,
-                used_tools=["gatk_liftover_vcf_tool"],
-            )
-
     if direct_tool and direct_tool.get("name") == "snpeff_execution_tool":
         try:
             return _handle_snpeff_request(payload)
@@ -606,17 +831,6 @@ def answer_analysis_chat(payload: AnalysisChatRequest) -> AnalysisChatResponse:
                 used_tools=["snpeff_execution_tool"],
             )
 
-    if direct_tool and direct_tool.get("name") == "plink_execution_tool":
-        try:
-            return _handle_plink_request(payload)
-        except Exception as exc:
-            return AnalysisChatResponse(
-                answer=f"PLINK request handling failed: {exc}",
-                citations=[],
-                used_fallback=True,
-                used_tools=["plink_execution_tool"],
-                requested_view="plink",
-            )
     try:
         return _call_openai(payload)
     except Exception:
@@ -640,63 +854,14 @@ def answer_raw_qc_chat(payload: RawQcChatRequest) -> RawQcChatResponse:
             used_fallback=False,
         )
 
-    lowered = payload.question.lower()
-    if "samtools" in lowered:
-        alignment_kind = (payload.analysis.facts.file_kind or "").upper()
-        if alignment_kind not in {"BAM", "SAM", "CRAM", "ALIGNMENT"}:
-            return RawQcChatResponse(
-                answer=(
-                    "samtools is intended for alignment files such as BAM, SAM, or CRAM. "
-                    f"The current uploaded source is `{payload.analysis.facts.file_name}` ({payload.analysis.facts.file_kind})."
-                ),
-                citations=[],
-                used_fallback=False,
-            )
-        raw_path = payload.analysis.source_raw_path
-        if not raw_path:
-            return RawQcChatResponse(
-                answer=(
-                    "samtools could not be run because this raw-QC session does not retain a durable source path yet. "
-                    "Please re-upload the BAM/SAM/CRAM file and try again."
-                ),
-                citations=[],
-                used_fallback=False,
-            )
+    at_tool_request = _parse_at_tool_request(payload.question)
+    if at_tool_request:
         try:
-            result = run_samtools(
-                SamtoolsRequest(
-                    raw_path=raw_path,
-                    original_name=payload.analysis.facts.file_name,
-                )
-            )
-            idx_lines = [
-                f"- {item.contig}: mapped {item.mapped}, unmapped {item.unmapped}, length {item.length_bp}"
-                for item in result.idxstats_rows[:5]
-            ]
-            answer = (
-                f"samtools reviewed `{result.display_name}` ({result.file_kind}).\n\n"
-                f"- Quickcheck: {'PASS' if result.quickcheck_ok else 'issue detected'}\n"
-                f"- Total reads: {result.total_reads if result.total_reads is not None else 'unknown'}\n"
-                f"- Mapped reads: {result.mapped_reads if result.mapped_reads is not None else 'unknown'}"
-                f"{f' ({result.mapped_rate:.2f}%)' if result.mapped_rate is not None else ''}\n"
-                f"- Properly paired reads: {result.properly_paired_reads if result.properly_paired_reads is not None else 'unknown'}"
-                f"{f' ({result.properly_paired_rate:.2f}%)' if result.properly_paired_rate is not None else ''}\n"
-                f"- Singleton reads: {result.singleton_reads if result.singleton_reads is not None else 'unknown'}\n"
-                f"- Index path: {result.index_path or 'none'}\n\n"
-                "Top idxstats rows:\n"
-                f"{chr(10).join(idx_lines) if idx_lines else '- idxstats rows are not available for this input.'}"
-            )
-            if result.warnings:
-                answer += "\n\nWarnings:\n" + "\n".join(f"- {warning}" for warning in result.warnings[:5])
-            return RawQcChatResponse(
-                answer=answer,
-                citations=[],
-                used_fallback=False,
-                samtools_result=result,
-            )
+            return _handle_raw_qc_at_tool_request(payload, at_tool_request)
         except Exception as exc:
+            alias = str(at_tool_request.get("alias") or "tool")
             return RawQcChatResponse(
-                answer=f"samtools 실행 중 오류가 발생했습니다: {exc}",
+                answer=f"`@{alias}` execution failed: {exc}",
                 citations=[],
                 used_fallback=False,
             )
@@ -753,7 +918,7 @@ def answer_raw_qc_chat(payload: RawQcChatRequest) -> RawQcChatResponse:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "20"))) as response:
+        with urllib.request.urlopen(request, timeout=OPENAI_TIMEOUT_SECONDS) as response:
             result = json.loads(response.read().decode("utf-8"))
         output_text = result.get("output_text")
         if not output_text:
@@ -846,7 +1011,7 @@ def answer_summary_stats_chat(payload: SummaryStatsChatRequest) -> SummaryStatsC
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "20"))) as response:
+        with urllib.request.urlopen(request, timeout=OPENAI_TIMEOUT_SECONDS) as response:
             result = json.loads(response.read().decode("utf-8"))
         output_text = result.get("output_text")
         if not output_text:

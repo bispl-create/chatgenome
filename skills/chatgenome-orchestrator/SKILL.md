@@ -100,8 +100,17 @@ The chat layer should separate general conversation from grounded Studio interpr
 ### Tool execution policy
 
 - A tool should run only when the user explicitly requests execution or when the workflow stage deterministically requires it.
+- Prefer `@toolname` as the explicit execution trigger for tool calls.
+- Prefer `@toolname help` when the user wants to understand tool options before execution.
+- `@toolname` should use the current active source by default.
 - Tool recommendation policy belongs in skill; actual tool invocation belongs in backend/runtime.
 - Do not execute a tool just because a user asked a conceptual question about the tool domain.
+- For the current migration stage:
+  - `@liftover` should use the active VCF source.
+  - `@samtools` should use the active BAM/SAM/CRAM raw-QC source.
+  - `@plink` should use the active VCF source and open the curated PLINK Studio flow.
+  - `@liftover help` and `@samtools help` should render curated option help from tool metadata instead of a hard-coded backend explanation.
+  - `@plink help` should render curated option help from tool metadata instead of a hard-coded backend explanation.
 
 ## Source-specific follow-up policy
 

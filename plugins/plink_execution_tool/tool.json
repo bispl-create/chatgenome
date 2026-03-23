@@ -27,5 +27,60 @@
     "requires_gpu": false,
     "allow_cpu_fallback": true,
     "estimated_runtime_sec": 10
+  },
+  "help": {
+    "summary": "Open the curated PLINK 2 QC workflow for the active VCF source.",
+    "modes": [
+      {
+        "name": "qc",
+        "description": "Prepare the PLINK Studio card for frequency, missingness, and Hardy-Weinberg summaries."
+      }
+    ],
+    "options": [
+      {
+        "name": "mode",
+        "type": "string",
+        "required": false,
+        "default": "qc",
+        "description": "Workflow mode. The current ChatGenome build supports the qc preset."
+      },
+      {
+        "name": "freq",
+        "type": "boolean",
+        "required": false,
+        "default": true,
+        "description": "Run allele frequency summary."
+      },
+      {
+        "name": "missing",
+        "type": "boolean",
+        "required": false,
+        "default": true,
+        "description": "Run sample and variant missingness summary."
+      },
+      {
+        "name": "hardy",
+        "type": "boolean",
+        "required": false,
+        "default": true,
+        "description": "Run Hardy-Weinberg summary."
+      },
+      {
+        "name": "allow_extra_chr",
+        "type": "boolean",
+        "required": false,
+        "default": true,
+        "description": "Allow non-canonical chromosome labels when preparing the run."
+      }
+    ],
+    "examples": [
+      "@plink help",
+      "@plink",
+      "@plink mode=qc"
+    ],
+    "notes": [
+      "Uses the active VCF source by default.",
+      "The current ChatGenome flow opens the PLINK Studio card, where the final QC configuration can be reviewed before execution."
+    ]
   }
 }
