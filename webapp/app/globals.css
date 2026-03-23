@@ -2031,6 +2031,17 @@ button {
   flex-wrap: wrap;
   gap: 12px;
   margin-top: 20px;
+  align-items: center;
+}
+
+.resultActionRow .sourceAddButton {
+  width: auto;
+  min-width: 148px;
+  margin-bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
 }
 
 .codeBlock {
