@@ -1,0 +1,57 @@
+{
+  "name": "qqman_execution_tool",
+  "description": "Render Manhattan and QQ plots from GWAS-style summary statistics using the locally checked out qqman repository.",
+  "task": "gwas-visualization",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "plugin",
+  "routing": {
+    "trigger_keywords": ["qqman", "manhattan", "qqplot", "qq"],
+    "execution_intents": ["run", "execute", "plot", "draw", "실행", "그려", "그리기"],
+    "requires_source_vcf": false,
+    "question_argument": "none",
+    "result_slot": "qqman_result",
+    "execution_mode": "direct_endpoint"
+  },
+  "orchestration": {
+    "tool_kind": "execution",
+    "default_stage": "post-gwas",
+    "depends_on": [],
+    "consumes": ["summary_stats_path"],
+    "produces": ["qqman_result"],
+    "priority": 72,
+    "on_demand": true
+  },
+  "runtime": {
+    "host_compatible": ["cpu"],
+    "requires_gpu": false,
+    "allow_cpu_fallback": true,
+    "estimated_runtime_sec": 10
+  },
+  "help": {
+    "summary": "Render qqman Manhattan and QQ plots for the active GWAS summary-statistics source.",
+    "modes": [
+      {
+        "name": "association",
+        "description": "Create Manhattan and QQ plots from a summary-statistics table containing CHR, BP, and P columns."
+      }
+    ],
+    "options": [
+      {
+        "name": "output_prefix",
+        "type": "string",
+        "required": false,
+        "description": "Optional prefix for output PNG files under the R plot output directory."
+      }
+    ],
+    "examples": [
+      "@qqman help",
+      "@qqman",
+      "@qqman output_prefix=alzheimers_qqman"
+    ],
+    "notes": [
+      "Uses the active summary-statistics source by default.",
+      "The current ChatGenome build renders both Manhattan and QQ plots in one run."
+    ]
+  }
+}

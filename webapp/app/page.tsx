@@ -307,6 +307,7 @@ type SummaryStatsResponse = {
   row_count: number;
   preview_rows: Array<Record<string, string>>;
   warnings: string[];
+  qqman_result?: RPlotResponse | null;
   draft_answer: string;
   used_tools?: string[];
   tool_registry?: Array<{
@@ -333,6 +334,22 @@ type SummaryStatsChatResponse = {
   used_fallback: boolean;
   requested_view?: StudioView | null;
   analysis?: SummaryStatsResponse | null;
+  qqman_result?: RPlotResponse | null;
+};
+
+type RPlotResponse = {
+  tool: string;
+  input_path: string;
+  output_dir: string;
+  command_preview: string;
+  artifacts: Array<{
+    plot_type: string;
+    title: string;
+    image_path: string;
+    api_path: string;
+    note: string;
+  }>;
+  warnings: string[];
 };
 
 type AnalysisChatResponse = {
@@ -415,6 +432,7 @@ type StudioView =
   | "coverage"
   | "rawqc"
   | "sumstats"
+  | "qqman"
   | "samtools"
   | "snpeff"
   | "plink"
@@ -880,6 +898,7 @@ export default function Page() {
   const [directPlinkResult, setDirectPlinkResult] = useState<AnalysisResponse["plink_result"] | null>(null);
   const [directSnpeffResult, setDirectSnpeffResult] = useState<AnalysisResponse["snpeff_result"] | null>(null);
   const [directLdblockshowResult, setDirectLdblockshowResult] = useState<AnalysisResponse["ldblockshow_result"] | null>(null);
+  const [directQqmanResult, setDirectQqmanResult] = useState<RPlotResponse | null>(null);
   const [annotationScope, setAnnotationScope] = useState<"representative" | "all">("representative");
   const [annotationLimit, setAnnotationLimit] = useState("200");
   const [status, setStatus] = useState("Waiting for a genomics source");
@@ -937,6 +956,9 @@ export default function Page() {
     }
     if (normalized.includes("ldblockshow")) {
       return "@ldblockshow";
+    }
+    if (normalized.includes("qqman")) {
+      return "@qqman";
     }
     return `@${normalized.replace(/_execution_tool$|_tool$|_vcf_tool$/g, "").replace(/^gatk_/, "").replace(/_/g, "")}`;
   }
@@ -1155,6 +1177,7 @@ export default function Page() {
     setDirectPlinkResult(null);
     setDirectSnpeffResult(null);
     setDirectLdblockshowResult(null);
+    setDirectQqmanResult(null);
     setFollowUpAnswer(null);
     setAnalysisQa([]);
     setActiveStudioView(null);
@@ -1362,6 +1385,32 @@ export default function Page() {
           `- Region: ${payload?.region || options.region}\n` +
           `- PNG: ${payload?.png_path || "n/a"}\n` +
           `- SVG: ${payload?.svg_path || "n/a"}`,
+      });
+      return;
+    }
+
+    if (alias === "qqman" && activeSource.source_type === "summary_stats") {
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/qqman/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          association_path: activeSource.source_path,
+          output_prefix: options.output_prefix || `${activeSource.file_name}-qqman`,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = (await response.json()) as RPlotResponse;
+      setDirectQqmanResult(payload);
+      setActiveStudioView("qqman");
+      addMessage({
+        role: "assistant",
+        content:
+          `qqman plots were generated for the current summary-statistics source.\n\n` +
+          `- Output directory: ${payload.output_dir}\n` +
+          `- Plot artifacts: ${payload.artifacts.length}\n` +
+          `- Warnings: ${payload.warnings.length}`,
       });
       return;
     }
@@ -1954,6 +2003,9 @@ export default function Page() {
       if (payload.analysis) {
         setSummaryStatsAnalysis(payload.analysis);
       }
+      if (payload.qqman_result) {
+        setDirectQqmanResult(payload.qqman_result);
+      }
       if (payload.requested_view) {
         setActiveStudioView(payload.requested_view);
       }
@@ -2277,10 +2329,12 @@ export default function Page() {
   const liftoverResultForStudio = analysis?.liftover_result ?? directLiftoverResult;
   const ldblockshowResultForStudio = analysis?.ldblockshow_result ?? directLdblockshowResult;
   const samtoolsResultForStudio = rawQcAnalysis?.samtools_result ?? directSamtoolsResult;
+  const qqmanResultForStudio = summaryStatsAnalysis?.qqman_result ?? directQqmanResult;
   const hasStudioState = Boolean(
     analysis ||
       rawQcAnalysis ||
       summaryStatsAnalysis ||
+      qqmanResultForStudio ||
       snpeffResultForStudio ||
       plinkResultForStudio ||
       liftoverResultForStudio ||
@@ -2295,7 +2349,12 @@ export default function Page() {
           : []),
       ]
     : summaryStatsAnalysis
-      ? [{ id: "sumstats" as StudioView, title: "Summary Stats Review", subtitle: "Post-GWAS intake and column mapping" }]
+      ? [
+          { id: "sumstats" as StudioView, title: "Summary Stats Review", subtitle: "Post-GWAS intake and column mapping" },
+          ...(qqmanResultForStudio
+            ? [{ id: "qqman" as StudioView, title: "qqman Plots", subtitle: "Manhattan and QQ visualization" }]
+            : []),
+        ]
     : analysis
       ? [
           { id: "provenance", title: "Workflow Setup", subtitle: "Tools, scope, and run policy" },
@@ -2335,6 +2394,9 @@ export default function Page() {
           : []),
           ...(ldblockshowResultForStudio
           ? [{ id: "ldblockshow" as StudioView, title: "LD Block Review", subtitle: "Locus-level LD heatmap" }]
+          : []),
+          ...(qqmanResultForStudio
+          ? [{ id: "qqman" as StudioView, title: "qqman Plots", subtitle: "Manhattan and QQ visualization" }]
           : []),
         ];
   const studioContext = useMemo(() => {
@@ -3019,6 +3081,60 @@ export default function Page() {
                     </article>
                   ))}
                 </div>
+              </div>
+            </section>
+          ) : null}
+
+          {qqmanResultForStudio && activeStudioView === "qqman" ? (
+            <section className="notebookPanel studioCanvasPanel">
+              <div className="notebookHeader">
+                <h2>qqman Plots</h2>
+              </div>
+              <div className="studioCanvasBody">
+                <div className="resultMetricGrid">
+                  <MetricTile label="Tool" value={qqmanResultForStudio.tool} tone="good" />
+                  <MetricTile label="Artifacts" value={String(qqmanResultForStudio.artifacts.length)} tone="neutral" />
+                  <MetricTile label="Warnings" value={String(qqmanResultForStudio.warnings.length)} tone="neutral" />
+                </div>
+                <div className="resultList">
+                  <article className="resultListItem resultListStatic">
+                    <strong>Command preview</strong>
+                    <pre className="codeBlock">{qqmanResultForStudio.command_preview}</pre>
+                  </article>
+                </div>
+                <div className="resultSectionSplit">
+                  {qqmanResultForStudio.artifacts.map((artifact) => (
+                    <article key={artifact.api_path} className="miniCard">
+                      <h3>{artifact.title}</h3>
+                      <img
+                        src={`${apiBase.replace(/\/$/, "")}${artifact.api_path}`}
+                        alt={artifact.title}
+                        className="plotPreviewImage"
+                      />
+                      <p className="resultNote">{artifact.note}</p>
+                      <div className="resultActionRow">
+                        <a
+                          className="sourceAddButton"
+                          href={`${apiBase.replace(/\/$/, "")}${artifact.api_path}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open image
+                        </a>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                {qqmanResultForStudio.warnings.length ? (
+                  <div className="resultList">
+                    {qqmanResultForStudio.warnings.map((warning, index) => (
+                      <article key={`qqman-warning-${index}`} className="resultListItem resultListStatic">
+                        <strong>Warning {index + 1}</strong>
+                        <span>{warning}</span>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             </section>
           ) : null}

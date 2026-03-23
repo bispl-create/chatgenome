@@ -28,6 +28,7 @@ from app.models import (
     FromPathRequest,
     PlinkRequest,
     PlinkResponse,
+    QqmanAssociationRequest,
     RankedCandidate,
     RawQcChatRequest,
     RawQcChatResponse,
@@ -64,7 +65,7 @@ from app.services.plink import run_plink
 from app.services.samtools import run_samtools
 from app.services.recommendation import build_recommendations
 from app.services.references import build_reference_bundle
-from app.services.r_vcf_plots import RPLOT_OUTPUT_DIR, run_cmplot_association, run_r_vcf_plots
+from app.services.r_vcf_plots import RPLOT_OUTPUT_DIR, run_cmplot_association, run_qqman_association, run_r_vcf_plots
 from app.services.roh_analysis import run_roh_analysis
 from app.services.snpeff import run_snpeff
 from app.services.summary_stats import analyze_summary_stats, load_summary_stats_rows
@@ -717,6 +718,16 @@ def run_cmplot(request: CmplotAssociationRequest) -> RPlotResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"CMplot association rendering failed: {exc}") from exc
+
+
+@app.post("/api/v1/qqman/run", response_model=RPlotResponse)
+def run_qqman(request: QqmanAssociationRequest) -> RPlotResponse:
+    try:
+        return run_qqman_association(request)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"qqman association rendering failed: {exc}") from exc
 
 
 @app.post("/api/v1/analysis/upload", response_model=AnalysisResponse)

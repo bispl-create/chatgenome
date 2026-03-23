@@ -10,6 +10,7 @@ from pathlib import Path
 from app.models import (
     AnalysisChatRequest,
     AnalysisChatResponse,
+    QqmanAssociationRequest,
     RawQcChatRequest,
     RawQcChatResponse,
     SummaryStatsChatRequest,
@@ -30,6 +31,7 @@ from app.services.gatk_liftover import (
 )
 from app.services.ldblockshow import run_ldblockshow
 from app.services.plink import run_plink
+from app.services.r_vcf_plots import run_qqman_association
 from app.services.samtools import run_samtools
 from app.services.snpeff import run_snpeff
 from app.services.workflows import analyze_raw_qc_workflow, analyze_summary_stats_workflow, analyze_vcf_workflow
@@ -611,6 +613,12 @@ def _handle_analysis_at_tool_request(payload: AnalysisChatRequest, tool_request:
             citations=[],
             used_fallback=False,
         )
+    if name == "qqman_execution_tool":
+        return AnalysisChatResponse(
+            answer="`@qqman` uses the active summary-statistics source. Run it from a summary-statistics session rather than a VCF session.",
+            citations=[],
+            used_fallback=False,
+        )
     return None
 
 
@@ -765,6 +773,58 @@ def _handle_raw_qc_skill_request(payload: RawQcChatRequest, skill_request: dict[
         answer=f"`@skill {workflow_name}` is registered but not yet executable in raw-QC chat.",
         citations=[],
         used_fallback=False,
+    )
+
+
+def _handle_summary_stats_at_tool_request(
+    payload: SummaryStatsChatRequest, tool_request: dict[str, object]
+) -> SummaryStatsChatResponse:
+    manifest = tool_request.get("manifest")
+    alias = str(tool_request.get("alias") or "")
+    remainder = str(tool_request.get("remainder") or "")
+    if manifest is None:
+        return SummaryStatsChatResponse(
+            answer=f"`@{alias}` is not a registered ChatGenome tool.",
+            citations=[],
+            used_fallback=False,
+        )
+    if bool(tool_request.get("is_help")):
+        return SummaryStatsChatResponse(answer=_render_tool_help(manifest), citations=[], used_fallback=False)
+
+    name = str(manifest.get("name") or "")
+    if name != "qqman_execution_tool":
+        return SummaryStatsChatResponse(
+            answer=f"`@{alias}` is not available for the current summary-statistics source type.",
+            citations=[],
+            used_fallback=False,
+        )
+
+    source_stats_path = payload.analysis.source_stats_path
+    if not source_stats_path:
+        return SummaryStatsChatResponse(
+            answer="The active summary-statistics session does not expose a durable source file path, so `@qqman` cannot run yet.",
+            citations=[],
+            used_fallback=False,
+        )
+    options = _extract_key_value_options(remainder)
+    result = run_qqman_association(
+        QqmanAssociationRequest(
+            association_path=source_stats_path,
+            output_prefix=options.get("output_prefix") or f"{payload.analysis.analysis_id}-qqman",
+        )
+    )
+    return SummaryStatsChatResponse(
+        answer=(
+            "qqman plots were generated for the active summary-statistics source.\n\n"
+            f"- Output directory: `{result.output_dir}`\n"
+            f"- Plot artifacts: {len(result.artifacts)}\n"
+            f"- Warnings: {len(result.warnings)}\n\n"
+            "The Studio card has been updated with the latest qqman result."
+        ),
+        citations=[],
+        used_fallback=False,
+        requested_view="qqman",
+        qqman_result=result,
     )
 
 
@@ -1091,6 +1151,18 @@ def answer_summary_stats_chat(payload: SummaryStatsChatRequest) -> SummaryStatsC
             citations=[],
             used_fallback=False,
         )
+
+    at_tool_request = _parse_at_tool_request(payload.question)
+    if at_tool_request:
+        try:
+            return _handle_summary_stats_at_tool_request(payload, at_tool_request)
+        except Exception as exc:
+            alias = str(at_tool_request.get("alias") or "tool")
+            return SummaryStatsChatResponse(
+                answer=f"`@{alias}` execution failed: {exc}",
+                citations=[],
+                used_fallback=True,
+            )
 
     skill_request = _parse_skill_request(payload.question)
     if skill_request:

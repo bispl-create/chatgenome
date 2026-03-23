@@ -295,6 +295,7 @@ class SummaryStatsResponse(BaseModel):
     row_count: int = 0
     preview_rows: list[dict[str, str]] = []
     warnings: list[str] = []
+    qqman_result: Optional[RPlotResponse] = None
     draft_answer: str
     used_tools: list[str] = []
     tool_registry: list[ToolInfo] = []
@@ -326,6 +327,7 @@ class SummaryStatsChatResponse(BaseModel):
     used_fallback: bool
     requested_view: Optional[str] = None
     analysis: Optional[SummaryStatsResponse] = None
+    qqman_result: Optional[RPlotResponse] = None
 
 
 class WorkflowStartRequest(BaseModel):
@@ -600,6 +602,17 @@ class RPlotRequest(BaseModel):
 
 
 class CmplotAssociationRequest(BaseModel):
+    association_path: str = Field(
+        ...,
+        description="Absolute path to a TSV/CSV table with GWAS-style association columns such as SNP/CHR/BP/P.",
+    )
+    output_prefix: Optional[str] = Field(
+        default=None,
+        description="Optional output prefix. Files are written under the app R plot output directory.",
+    )
+
+
+class QqmanAssociationRequest(BaseModel):
     association_path: str = Field(
         ...,
         description="Absolute path to a TSV/CSV table with GWAS-style association columns such as SNP/CHR/BP/P.",
