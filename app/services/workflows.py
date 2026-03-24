@@ -431,6 +431,29 @@ def run_registered_summary_stats_workflow(
             "The active summary-statistics session does not expose a durable source file path, so this workflow cannot be rerun from chat."
         )
 
+    if workflow_name == "summary_stats_review":
+        refreshed = analyze_summary_stats_workflow(
+            analysis.source_stats_path or "",
+            analysis.file_name,
+            genome_build=analysis.genome_build,
+            trait_type=analysis.trait_type,
+        )
+        requested_view = str(manifest.get("requested_view") or "sumstats")
+        auto_mapped_count = sum(1 for value in refreshed.mapped_fields.model_dump().values() if value)
+        answer = (
+            "The summary_stats_review workflow was rerun on the active source.\n\n"
+            f"- Workflow: `{workflow_name}`\n"
+            f"- Active file: `{refreshed.file_name}`\n"
+            f"- Rows detected: {refreshed.row_count}\n"
+            f"- Auto-mapped fields: {auto_mapped_count}\n\n"
+            "The Summary Statistics Review state has been refreshed. Use `$studio ...` for grounded explanation of the current review state, or ask for a downstream workflow such as PRS preparation."
+        )
+        return {
+            "answer": answer,
+            "analysis": refreshed,
+            "requested_view": requested_view,
+        }
+
     if workflow_name == "prs_prep":
         prs_prep_result = analyze_prs_prep_workflow(
             analysis.source_stats_path or "",

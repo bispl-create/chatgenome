@@ -1476,35 +1476,7 @@ def answer_summary_stats_chat(payload: SummaryStatsChatRequest) -> SummaryStatsC
                     used_fallback=False,
                 )
             workflow_name = str(manifest.get("name") or "")
-            if workflow_name == "summary_stats_review":
-                source_stats_path = payload.analysis.source_stats_path
-                if not source_stats_path:
-                    return SummaryStatsChatResponse(
-                        answer="The active summary-statistics session does not expose a durable source file path, so this workflow cannot be rerun from chat.",
-                        citations=[],
-                        used_fallback=False,
-                    )
-                refreshed = analyze_summary_stats_workflow(
-                    source_stats_path,
-                    payload.analysis.file_name,
-                    genome_build=payload.analysis.genome_build,
-                    trait_type=payload.analysis.trait_type,
-                )
-                return SummaryStatsChatResponse(
-                    answer=(
-                        "The summary_stats_review workflow was rerun on the active source.\n\n"
-                        f"- Workflow: `{workflow_name}`\n"
-                        f"- Active file: `{refreshed.file_name}`\n"
-                        f"- Rows detected: {refreshed.row_count}\n"
-                        f"- Auto-mapped fields: {sum(1 for value in refreshed.mapped_fields.model_dump().values() if value)}\n\n"
-                        "The Summary Statistics Review state has been refreshed. Use `$studio ...` for grounded explanation of the current review state, or ask for a downstream workflow such as PRS preparation."
-                    ),
-                    citations=[],
-                    used_fallback=False,
-                    requested_view="sumstats",
-                    analysis=refreshed,
-                )
-            if workflow_name == "prs_prep":
+            if workflow_name in {"summary_stats_review", "prs_prep"}:
                 workflow_result = run_registered_summary_stats_workflow(
                     workflow_name,
                     payload.analysis,
@@ -1513,7 +1485,7 @@ def answer_summary_stats_chat(payload: SummaryStatsChatRequest) -> SummaryStatsC
                     answer=str(workflow_result["answer"]),
                     citations=[],
                     used_fallback=False,
-                    requested_view=str(workflow_result.get("requested_view") or "prs_prep"),
+                    requested_view=str(workflow_result.get("requested_view") or "sumstats"),
                     analysis=workflow_result.get("analysis"),
                     prs_prep_result=workflow_result.get("prs_prep_result"),
                 )
