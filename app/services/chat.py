@@ -37,10 +37,6 @@ from app.services.samtools import run_samtools
 from app.services.snpeff import run_snpeff
 from app.services.workflows import (
     run_registered_analysis_workflow,
-    analyze_prs_prep_workflow,
-    analyze_raw_qc_workflow,
-    analyze_summary_stats_workflow,
-    analyze_vcf_workflow,
     list_workflow_manifests,
     load_workflow_manifest,
     run_registered_raw_qc_workflow,
@@ -406,6 +402,74 @@ def _dispatch_for_manifest(
         return None
     name = str(manifest.get("name") or "")
     return dispatch_table.get(name)
+
+
+def _dispatch_analysis_representative_vcf_review(
+    payload: AnalysisChatRequest,
+    skill_request: dict[str, object],
+) -> AnalysisChatResponse:
+    workflow_result = run_registered_analysis_workflow(
+        str(skill_request["manifest"]["name"]),
+        payload.analysis,
+    )
+    return AnalysisChatResponse(
+        answer=str(workflow_result["answer"]),
+        citations=[],
+        used_fallback=False,
+        requested_view=str(workflow_result.get("requested_view") or "summary"),
+        analysis=workflow_result.get("analysis"),
+    )
+
+
+def _dispatch_raw_qc_review_workflow(
+    payload: RawQcChatRequest,
+    skill_request: dict[str, object],
+) -> RawQcChatResponse:
+    workflow_result = run_registered_raw_qc_workflow(
+        str(skill_request["manifest"]["name"]),
+        payload.analysis,
+    )
+    return RawQcChatResponse(
+        answer=str(workflow_result["answer"]),
+        citations=[],
+        used_fallback=False,
+        requested_view=str(workflow_result.get("requested_view") or "rawqc"),
+        analysis=workflow_result.get("analysis"),
+    )
+
+
+def _dispatch_summary_stats_registered_workflow(
+    payload: SummaryStatsChatRequest,
+    skill_request: dict[str, object],
+) -> SummaryStatsChatResponse:
+    workflow_result = run_registered_summary_stats_workflow(
+        str(skill_request["manifest"]["name"]),
+        payload.analysis,
+    )
+    return SummaryStatsChatResponse(
+        answer=str(workflow_result["answer"]),
+        citations=[],
+        used_fallback=False,
+        requested_view=str(workflow_result.get("requested_view") or "sumstats"),
+        analysis=workflow_result.get("analysis"),
+        prs_prep_result=workflow_result.get("prs_prep_result"),
+    )
+
+
+ANALYSIS_WORKFLOW_DISPATCH: dict[str, Any] = {
+    "representative_vcf_review": _dispatch_analysis_representative_vcf_review,
+}
+
+
+RAW_QC_WORKFLOW_DISPATCH: dict[str, Any] = {
+    "raw_qc_review": _dispatch_raw_qc_review_workflow,
+}
+
+
+SUMMARY_STATS_WORKFLOW_DISPATCH: dict[str, Any] = {
+    "summary_stats_review": _dispatch_summary_stats_registered_workflow,
+    "prs_prep": _dispatch_summary_stats_registered_workflow,
+}
 
 
 def _with_result_field(result_kind: str | None, result: object, **kwargs: Any) -> dict[str, Any]:
@@ -931,19 +995,10 @@ def _handle_analysis_skill_request(payload: AnalysisChatRequest, skill_request: 
             citations=[],
             used_fallback=False,
         )
+    dispatch = _dispatch_for_manifest(manifest, ANALYSIS_WORKFLOW_DISPATCH)
+    if dispatch is not None:
+        return dispatch(payload, skill_request)
     workflow_name = str(manifest.get("name") or "")
-    if workflow_name == "representative_vcf_review":
-        workflow_result = run_registered_analysis_workflow(
-            workflow_name,
-            payload.analysis,
-        )
-        return AnalysisChatResponse(
-            answer=str(workflow_result["answer"]),
-            citations=[],
-            used_fallback=False,
-            requested_view=str(workflow_result.get("requested_view") or "summary"),
-            analysis=workflow_result.get("analysis"),
-        )
     return AnalysisChatResponse(
         answer=f"`@skill {workflow_name}` is registered but not yet executable in analysis chat.",
         citations=[],
@@ -1029,19 +1084,10 @@ def _handle_raw_qc_skill_request(payload: RawQcChatRequest, skill_request: dict[
             citations=[],
             used_fallback=False,
         )
+    dispatch = _dispatch_for_manifest(manifest, RAW_QC_WORKFLOW_DISPATCH)
+    if dispatch is not None:
+        return dispatch(payload, skill_request)
     workflow_name = str(manifest.get("name") or "")
-    if workflow_name == "raw_qc_review":
-        workflow_result = run_registered_raw_qc_workflow(
-            workflow_name,
-            payload.analysis,
-        )
-        return RawQcChatResponse(
-            answer=str(workflow_result["answer"]),
-            citations=[],
-            used_fallback=False,
-            requested_view=str(workflow_result.get("requested_view") or "rawqc"),
-            analysis=workflow_result.get("analysis"),
-        )
     return RawQcChatResponse(
         answer=f"`@skill {workflow_name}` is registered but not yet executable in raw-QC chat.",
         citations=[],
@@ -1456,20 +1502,10 @@ def answer_summary_stats_chat(payload: SummaryStatsChatRequest) -> SummaryStatsC
                     citations=[],
                     used_fallback=False,
                 )
+            dispatch = _dispatch_for_manifest(manifest, SUMMARY_STATS_WORKFLOW_DISPATCH)
+            if dispatch is not None:
+                return dispatch(payload, skill_request)
             workflow_name = str(manifest.get("name") or "")
-            if workflow_name in {"summary_stats_review", "prs_prep"}:
-                workflow_result = run_registered_summary_stats_workflow(
-                    workflow_name,
-                    payload.analysis,
-                )
-                return SummaryStatsChatResponse(
-                    answer=str(workflow_result["answer"]),
-                    citations=[],
-                    used_fallback=False,
-                    requested_view=str(workflow_result.get("requested_view") or "sumstats"),
-                    analysis=workflow_result.get("analysis"),
-                    prs_prep_result=workflow_result.get("prs_prep_result"),
-                )
             return SummaryStatsChatResponse(
                 answer=f"`@skill {workflow_name}` is registered but not yet executable in summary-statistics chat.",
                 citations=[],
