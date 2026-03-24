@@ -290,6 +290,9 @@ Example:
   "name": "representative_vcf_review",
   "description": "Run the default representative VCF review workflow.",
   "source_type": "vcf",
+  "requested_view": "summary",
+  "requires": ["source_vcf_path"],
+  "produces": ["analysis", "grounded_summary"],
   "steps": [
     "vcf_qc_tool",
     "annotation_tool",

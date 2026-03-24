@@ -2,6 +2,14 @@
   "name": "prs_prep",
   "description": "Run build check and harmonization preparation for the active summary-statistics source before PLINK score-file generation.",
   "source_type": "summary_stats",
+  "requested_view": "prs_prep",
+  "requires": [
+    "source_stats_path"
+  ],
+  "produces": [
+    "prs_prep_result",
+    "score_file_path"
+  ],
   "steps": [
     "build_check",
     "harmonization_prep",

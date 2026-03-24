@@ -40,11 +40,12 @@ from app.services.workflows import (
     analyze_raw_qc_workflow,
     analyze_summary_stats_workflow,
     analyze_vcf_workflow,
+    list_workflow_manifests,
+    load_workflow_manifest,
 )
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 PLUGINS_DIR = ROOT_DIR / "plugins"
-WORKFLOWS_DIR = ROOT_DIR / "skills" / "chatgenome-orchestrator" / "workflows"
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "45"))
 
 TOOL_ALIAS_REGISTRY: dict[str, dict[str, Any]] = {
@@ -103,19 +104,6 @@ TOOL_ALIAS_REGISTRY: dict[str, dict[str, Any]] = {
 def _load_tool_manifests() -> list[dict[str, object]]:
     manifests: list[dict[str, object]] = []
     for manifest in sorted(PLUGINS_DIR.glob("*/tool.json")):
-        try:
-            payload = json.loads(manifest.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if isinstance(payload, dict):
-            manifests.append(payload)
-    return manifests
-
-
-@lru_cache(maxsize=1)
-def _load_workflow_manifests() -> list[dict[str, object]]:
-    manifests: list[dict[str, object]] = []
-    for manifest in sorted(WORKFLOWS_DIR.glob("*.json")):
         try:
             payload = json.loads(manifest.read_text(encoding="utf-8"))
         except Exception:
@@ -227,14 +215,7 @@ def _parse_skill_request(question: str) -> dict[str, object] | None:
     workflow_name = remainder.split()[0].strip()
     is_help = remainder.lower().endswith(" help")
     target_name = workflow_name
-    manifest = next(
-        (
-            item
-            for item in _load_workflow_manifests()
-            if str(item.get("name") or "").strip().lower() == workflow_name.lower()
-        ),
-        None,
-    )
+    manifest = load_workflow_manifest(workflow_name)
     return {
         "name": target_name,
         "remainder": remainder,
@@ -496,9 +477,7 @@ def _summary_stats_tool_response(
 
 
 def _render_skill_help(source_type: str | None = None, selected: dict[str, object] | None = None) -> str:
-    manifests = _load_workflow_manifests()
-    if source_type:
-        manifests = [item for item in manifests if str(item.get("source_type") or "").strip().lower() == source_type.lower()]
+    manifests = list_workflow_manifests(source_type=source_type)
     if selected is not None:
         manifests = [selected]
     if not manifests:

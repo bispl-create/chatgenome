@@ -2,6 +2,14 @@
   "name": "summary_stats_review",
   "description": "Run the default summary statistics intake and review workflow on the active summary-statistics source.",
   "source_type": "summary_stats",
+  "requested_view": "sumstats",
+  "requires": [
+    "source_stats_path"
+  ],
+  "produces": [
+    "summary_stats_analysis",
+    "grounded_summary"
+  ],
   "steps": [
     "summary_stats_intake",
     "summary_stats_qc",

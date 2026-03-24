@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -34,6 +36,42 @@ from app.services.vcf_summary import summarize_vcf
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 PLUGINS_DIR = ROOT_DIR / "plugins"
+WORKFLOWS_DIR = ROOT_DIR / "skills" / "chatgenome-orchestrator" / "workflows"
+
+
+@lru_cache(maxsize=1)
+def load_workflow_manifests() -> list[dict[str, object]]:
+    manifests: list[dict[str, object]] = []
+    for manifest in sorted(WORKFLOWS_DIR.glob("*.json")):
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            manifests.append(payload)
+    return manifests
+
+
+def list_workflow_manifests(source_type: str | None = None) -> list[dict[str, object]]:
+    manifests = load_workflow_manifests()
+    if source_type is None:
+        return manifests
+    normalized = source_type.strip().lower()
+    return [
+        item
+        for item in manifests
+        if str(item.get("source_type") or "").strip().lower() == normalized
+    ]
+
+
+def load_workflow_manifest(name: str | None) -> dict[str, object] | None:
+    if not name:
+        return None
+    normalized = str(name).strip().lower()
+    for manifest in load_workflow_manifests():
+        if str(manifest.get("name") or "").strip().lower() == normalized:
+            return manifest
+    return None
 
 
 def snpeff_genome_from_build(genome_build_guess: str | None) -> str:

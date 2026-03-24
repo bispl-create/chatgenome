@@ -2,6 +2,15 @@
   "name": "representative_vcf_review",
   "description": "Run the default representative VCF interpretation workflow on the active VCF source.",
   "source_type": "vcf",
+  "requested_view": "summary",
+  "requires": [
+    "source_vcf_path"
+  ],
+  "produces": [
+    "analysis",
+    "grounded_summary",
+    "candidate_variants"
+  ],
   "steps": [
     "vcf_qc_tool",
     "annotation_tool",

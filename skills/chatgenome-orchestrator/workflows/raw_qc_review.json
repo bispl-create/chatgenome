@@ -2,6 +2,14 @@
   "name": "raw_qc_review",
   "description": "Run the default raw sequencing QC workflow on the active FASTQ, BAM, or SAM source.",
   "source_type": "raw_qc",
+  "requested_view": "rawqc",
+  "requires": [
+    "source_raw_path"
+  ],
+  "produces": [
+    "raw_qc_analysis",
+    "fastqc_report"
+  ],
   "steps": [
     "fastqc_execution_tool"
   ],
