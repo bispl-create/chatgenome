@@ -42,6 +42,7 @@ from app.services.workflows import (
     analyze_vcf_workflow,
     list_workflow_manifests,
     load_workflow_manifest,
+    run_registered_raw_qc_workflow,
     run_registered_summary_stats_workflow,
 )
 
@@ -1039,27 +1040,16 @@ def _handle_raw_qc_skill_request(payload: RawQcChatRequest, skill_request: dict[
         )
     workflow_name = str(manifest.get("name") or "")
     if workflow_name == "raw_qc_review":
-        source_raw_path = payload.analysis.source_raw_path
-        if not source_raw_path:
-            return RawQcChatResponse(
-                answer="The active raw-QC session does not expose a durable source file path, so this workflow cannot be rerun from chat.",
-                citations=[],
-                used_fallback=False,
-            )
-        refreshed = analyze_raw_qc_workflow(source_raw_path, payload.analysis.facts.file_name)
+        workflow_result = run_registered_raw_qc_workflow(
+            workflow_name,
+            payload.analysis,
+        )
         return RawQcChatResponse(
-            answer=(
-                "The raw_qc_review workflow was rerun on the active source.\n\n"
-                f"- Workflow: `{workflow_name}`\n"
-                f"- Active file: `{refreshed.facts.file_name}`\n"
-                f"- Logged tools: {', '.join(refreshed.used_tools or []) or 'none'}\n"
-                f"- Modules: {len(refreshed.modules)}\n\n"
-                "The raw-QC state has been refreshed. Use `@samtools` for additional alignment review on compatible sources, or `$studio ...` for grounded explanation of the current Studio state."
-            ),
+            answer=str(workflow_result["answer"]),
             citations=[],
             used_fallback=False,
-            requested_view="rawqc",
-            analysis=refreshed,
+            requested_view=str(workflow_result.get("requested_view") or "rawqc"),
+            analysis=workflow_result.get("analysis"),
         )
     return RawQcChatResponse(
         answer=f"`@skill {workflow_name}` is registered but not yet executable in raw-QC chat.",

@@ -392,6 +392,48 @@ def analyze_raw_qc_workflow(path: str, original_name: str) -> RawQcResponse:
         raise RuntimeError(f"Raw QC failed: {exc}") from exc
 
 
+def run_registered_raw_qc_workflow(
+    workflow_name: str,
+    analysis: RawQcResponse,
+) -> dict[str, object]:
+    manifest = load_workflow_manifest(workflow_name)
+    if manifest is None:
+        raise ValueError(f"Unknown raw-QC workflow: {workflow_name}")
+    source_type = str(manifest.get("source_type") or "").strip().lower()
+    if source_type != "raw_qc":
+        raise ValueError(f"Workflow {workflow_name} is not registered for raw-QC sources.")
+
+    requires = [str(item).strip() for item in manifest.get("requires", []) if str(item).strip()]
+    if "source_raw_path" in requires and not analysis.source_raw_path:
+        raise RuntimeError(
+            "The active raw-QC session does not expose a durable source file path, so this workflow cannot be rerun from chat."
+        )
+
+    if workflow_name == "raw_qc_review":
+        refreshed = analyze_raw_qc_workflow(
+            analysis.source_raw_path or "",
+            analysis.facts.file_name,
+        )
+        requested_view = str(manifest.get("requested_view") or "rawqc")
+        answer = (
+            "The raw_qc_review workflow was rerun on the active source.\n\n"
+            f"- Workflow: `{workflow_name}`\n"
+            f"- Active file: `{refreshed.facts.file_name}`\n"
+            f"- Logged tools: {', '.join(refreshed.used_tools or []) or 'none'}\n"
+            f"- Modules: {len(refreshed.modules)}\n\n"
+            "The raw-QC state has been refreshed. Use `@samtools` for additional alignment review on compatible sources, or `$studio ...` for grounded explanation of the current Studio state."
+        )
+        return {
+            "answer": answer,
+            "analysis": refreshed,
+            "requested_view": requested_view,
+        }
+
+    raise NotImplementedError(
+        f"Workflow {workflow_name} is registered but not yet executable in the generic raw-QC runner."
+    )
+
+
 def analyze_summary_stats_workflow(
     path: str,
     original_name: str,
