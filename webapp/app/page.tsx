@@ -1432,6 +1432,87 @@ export default function Page() {
     return options;
   }
 
+  function toolRunningStatus(alias: string, remainder: string) {
+    const normalized = alias.trim().toLowerCase();
+    const wantsPlinkScore =
+      normalized === "plink" &&
+      (remainder.trim().toLowerCase() === "score" ||
+        parseInlineOptions(remainder).mode?.toLowerCase() === "score");
+    if (normalized === "liftover") {
+      return "Running Liftover...";
+    }
+    if (normalized === "qqman") {
+      return "Running qqman...";
+    }
+    if (normalized === "samtools") {
+      return "Running samtools...";
+    }
+    if (normalized === "snpeff") {
+      return "Running SnpEff...";
+    }
+    if (normalized === "ldblockshow") {
+      return "Running LDBlockShow...";
+    }
+    if (normalized === "plink") {
+      return wantsPlinkScore ? "Running PLINK score..." : "Running PLINK...";
+    }
+    return "Running tool...";
+  }
+
+  function toolReadyStatus(alias: string, remainder: string) {
+    const normalized = alias.trim().toLowerCase();
+    const wantsPlinkScore =
+      normalized === "plink" &&
+      (remainder.trim().toLowerCase() === "score" ||
+        parseInlineOptions(remainder).mode?.toLowerCase() === "score");
+    if (normalized === "liftover") {
+      return "Liftover ready";
+    }
+    if (normalized === "qqman") {
+      return "qqman ready";
+    }
+    if (normalized === "samtools") {
+      return "samtools ready";
+    }
+    if (normalized === "snpeff") {
+      return "SnpEff ready";
+    }
+    if (normalized === "ldblockshow") {
+      return "LDBlockShow ready";
+    }
+    if (normalized === "plink") {
+      return wantsPlinkScore ? "PLINK score ready" : "PLINK ready";
+    }
+    return "Tool ready";
+  }
+
+  function toolFailedStatus(alias: string, remainder: string) {
+    const normalized = alias.trim().toLowerCase();
+    const wantsPlinkScore =
+      normalized === "plink" &&
+      (remainder.trim().toLowerCase() === "score" ||
+        parseInlineOptions(remainder).mode?.toLowerCase() === "score");
+    if (normalized === "liftover") {
+      return "Liftover failed";
+    }
+    if (normalized === "qqman") {
+      return "qqman failed";
+    }
+    if (normalized === "samtools") {
+      return "samtools failed";
+    }
+    if (normalized === "snpeff") {
+      return "SnpEff failed";
+    }
+    if (normalized === "ldblockshow") {
+      return "LDBlockShow failed";
+    }
+    if (normalized === "plink") {
+      return wantsPlinkScore ? "PLINK score failed" : "PLINK failed";
+    }
+    return "Tool failed";
+  }
+
   async function runPreAnalysisTool(alias: string, remainder: string) {
     const preAnalysisSource =
       sessionMode === "prs"
@@ -1449,6 +1530,7 @@ export default function Page() {
       return;
     }
     const options = parseInlineOptions(remainder);
+    setStatus(toolRunningStatus(alias, remainder));
 
     if (alias === "liftover" && preAnalysisSource.source_type === "vcf") {
       const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/liftover/run`, {
@@ -1468,6 +1550,7 @@ export default function Page() {
       const payload = (await response.json()) as AnalysisResponse["liftover_result"];
       setDirectLiftoverResult(payload ?? null);
       setActiveStudioView("liftover");
+      setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
         content:
@@ -1495,6 +1578,7 @@ export default function Page() {
       const payload = (await response.json()) as RawQcResponse["samtools_result"];
       setDirectSamtoolsResult(payload ?? null);
       setActiveStudioView("samtools");
+      setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
         content:
@@ -1557,6 +1641,7 @@ export default function Page() {
       const payload = (await response.json()) as AnalysisResponse["plink_result"];
       setDirectPlinkResult(payload ?? null);
       setActiveStudioView("plink");
+      setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
         content:
@@ -1588,6 +1673,7 @@ export default function Page() {
       const payload = await response.json();
       setDirectSnpeffResult(payload ?? null);
       setActiveStudioView("snpeff");
+      setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
         content:
@@ -1621,6 +1707,7 @@ export default function Page() {
       const payload = await response.json();
       setDirectLdblockshowResult(payload ?? null);
       setActiveStudioView("ldblockshow");
+      setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
         content:
@@ -1647,6 +1734,7 @@ export default function Page() {
       const payload = (await response.json()) as RPlotResponse;
       setDirectQqmanResult(payload);
       setActiveStudioView("qqman");
+      setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
         content:
@@ -2059,6 +2147,7 @@ export default function Page() {
           await runPreAnalysisTool(alias.toLowerCase(), remainder);
         } catch (caught) {
           const message = caught instanceof Error ? caught.message : String(caught);
+          setStatus(toolFailedStatus(alias.toLowerCase(), remainder));
           addMessage({
             role: "assistant",
             content: `\`@${alias}\` 실행 중 오류가 발생했습니다: ${message}`,
@@ -2445,8 +2534,50 @@ export default function Page() {
     if (status === "Loading summary statistics...") {
       return "Reading the summary statistics file, detecting columns, and preparing a post-GWAS review surface.";
     }
+    if (status === "Running Liftover...") {
+      return "Running GATK LiftoverVcf on the active VCF and preparing lifted and rejected variant outputs.";
+    }
+    if (status === "Running qqman...") {
+      return "Generating Manhattan and QQ plots from the active summary-statistics source.";
+    }
+    if (status === "Running samtools...") {
+      return "Running samtools on the active alignment source and collecting quickcheck, stats, and idxstats summaries.";
+    }
+    if (status === "Running SnpEff...") {
+      return "Running SnpEff annotation on the active VCF and preparing parsed preview records.";
+    }
+    if (status === "Running LDBlockShow...") {
+      return "Running LDBlockShow for the requested region and preparing LD block visualization artifacts.";
+    }
+    if (status === "Running PLINK score...") {
+      return "Scoring the active target genotype against the prepared PRS weight file.";
+    }
+    if (status === "Running PLINK...") {
+      return "Running the PLINK QC workflow on the active VCF source.";
+    }
     if (status === "Answer ready") {
       return "The latest answer is ready in Chat and grounded against the current analysis context.";
+    }
+    if (status === "Liftover ready") {
+      return "Liftover finished and the LiftOver Review card has been updated in Studio.";
+    }
+    if (status === "qqman ready") {
+      return "qqman plotting finished and the qqman Plots card is ready in Studio.";
+    }
+    if (status === "samtools ready") {
+      return "samtools finished and the Samtools Review card is ready in Studio.";
+    }
+    if (status === "SnpEff ready") {
+      return "SnpEff finished and the SnpEff Review card is ready in Studio.";
+    }
+    if (status === "LDBlockShow ready") {
+      return "LDBlockShow finished and the LD block review card is ready in Studio.";
+    }
+    if (status === "PLINK score ready") {
+      return "PLINK score finished and the PRS Review output is ready in Studio.";
+    }
+    if (status === "PLINK ready") {
+      return "PLINK finished and the PLINK card has been updated in Studio.";
     }
     if (status === "Raw QC ready") {
       return "FastQC finished. You can inspect the module summary in Studio and ask follow-up questions in chat.";
@@ -2463,6 +2594,27 @@ export default function Page() {
     if (status === "Answer failed") {
       return "The last chat response failed. Retry the question and ChatGenome will attempt the grounded explanation again.";
     }
+    if (status === "Liftover failed") {
+      return "Liftover failed for the active VCF. Check the error details and genome-build inputs.";
+    }
+    if (status === "qqman failed") {
+      return "qqman failed for the active summary-statistics source. Check the file columns and plotting prerequisites.";
+    }
+    if (status === "samtools failed") {
+      return "samtools failed for the active alignment source. Check the file type, index, and runtime prerequisites.";
+    }
+    if (status === "SnpEff failed") {
+      return "SnpEff failed for the active VCF. Check the genome build and local runtime dependencies.";
+    }
+    if (status === "LDBlockShow failed") {
+      return "LDBlockShow failed for the requested region. Check whether the locus contains enough variants for LD plotting.";
+    }
+    if (status === "PLINK score failed") {
+      return "PLINK score failed. Check the target genotype source, score file, and variant overlap.";
+    }
+    if (status === "PLINK failed") {
+      return "PLINK failed for the active VCF. Check the input file and selected QC settings.";
+    }
     return latestStatusMessage;
   }, [latestStatusMessage, status]);
   const chatHeaderStatus =
@@ -2471,9 +2623,30 @@ export default function Page() {
     status === "Analyzing" ||
     status === "Running FastQC..." ||
     status === "Loading summary statistics..." ||
+    status === "Running Liftover..." ||
+    status === "Running qqman..." ||
+    status === "Running samtools..." ||
+    status === "Running SnpEff..." ||
+    status === "Running LDBlockShow..." ||
+    status === "Running PLINK..." ||
+    status === "Running PLINK score..." ||
     status === "Raw QC failed" ||
     status === "Summary stats failed" ||
-    status === "Answer failed"
+    status === "Answer failed" ||
+    status === "Liftover failed" ||
+    status === "qqman failed" ||
+    status === "samtools failed" ||
+    status === "SnpEff failed" ||
+    status === "LDBlockShow failed" ||
+    status === "PLINK failed" ||
+    status === "PLINK score failed" ||
+    status === "Liftover ready" ||
+    status === "qqman ready" ||
+    status === "samtools ready" ||
+    status === "SnpEff ready" ||
+    status === "LDBlockShow ready" ||
+    status === "PLINK ready" ||
+    status === "PLINK score ready"
       ? status
       : analysis || rawQcAnalysis || summaryStatsAnalysis
         ? analysis
