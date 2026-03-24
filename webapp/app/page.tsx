@@ -933,7 +933,7 @@ export default function Page() {
     {
       role: "assistant",
       content:
-        "먼저 세션 모드를 선택하세요. `@mode prs`는 PRS workflow를 시작하고 summary statistics와 target genotype 두 입력을 받습니다. `@mode vcf_analysis`는 VCF variant interpretation용 단일 입력 세션을 시작합니다. `@mode raw_sequence`는 FASTQ/BAM/SAM 기반 raw sequencing QC 세션을 시작합니다. 사용 가능한 모드를 다시 보려면 `@mode help`를 입력하세요.",
+        "Select a session mode first. `@mode prs` starts the PRS workflow and expects two inputs: summary statistics and a target genotype. `@mode vcf_analysis` starts a single-input VCF variant interpretation session. `@mode raw_sequence` starts a FASTQ/BAM/SAM raw sequencing QC session. To see the available modes again, enter `@mode help`.",
     },
   ]);
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
@@ -1889,6 +1889,12 @@ export default function Page() {
       setSelectedAnnotationIndex(0);
       setComposerText("");
       setStatus("Analysis ready");
+      if (!silent && payload.draft_answer?.trim()) {
+        addMessage({
+          role: "assistant",
+          content: formatSummaryWithCitations(payload.draft_answer, payload.references),
+        });
+      }
       return payload;
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
@@ -2493,7 +2499,7 @@ export default function Page() {
   const chatTurns =
     messageTurns.length === 0 && analysisQa.length === 0
       ? [...summaryTurn]
-      : [...summaryTurn, ...messageTurns, ...analysisQa];
+      : [...messageTurns, ...analysisQa];
   const qcMetrics = analysis?.facts.qc ?? null;
   const clinvarCounts = useMemo(() => {
     if (!analysis) {
