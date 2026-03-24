@@ -401,6 +401,22 @@ def _resolve_tool_source_mismatch_response(
     )
 
 
+def _unknown_tool_answer(tool_request: dict[str, object] | None) -> str:
+    alias = "tool"
+    if tool_request:
+        alias = str(tool_request.get("alias") or tool_request.get("input_alias") or "tool").strip() or "tool"
+    return f"`@{alias}` is not a registered ChatGenome tool."
+
+
+def _dispatch_for_manifest(
+    manifest: object, dispatch_table: dict[str, Any]
+) -> Any | None:
+    if not isinstance(manifest, dict):
+        return None
+    name = str(manifest.get("name") or "")
+    return dispatch_table.get(name)
+
+
 def _with_result_field(result_kind: str | None, result: object, **kwargs: Any) -> dict[str, Any]:
     payload = dict(kwargs)
     if result_kind and result is not None:
@@ -885,8 +901,6 @@ ANALYSIS_TOOL_DISPATCH: dict[str, Any] = {
 
 def _handle_analysis_at_tool_request(payload: AnalysisChatRequest, tool_request: dict[str, object]) -> AnalysisChatResponse | None:
     manifest = tool_request.get("manifest")
-    alias = str(tool_request.get("alias") or "")
-    remainder = str(tool_request.get("remainder") or "")
     help_text = _resolve_tool_help_response(tool_request)
     if help_text is not None:
         return AnalysisChatResponse(answer=help_text, citations=[], used_fallback=False)
@@ -895,12 +909,11 @@ def _handle_analysis_at_tool_request(payload: AnalysisChatRequest, tool_request:
         return AnalysisChatResponse(answer=mismatch_text, citations=[], used_fallback=False)
     if manifest is None:
         return AnalysisChatResponse(
-            answer=f"`@{alias}` is not a registered ChatGenome tool.",
+            answer=_unknown_tool_answer(tool_request),
             citations=[],
             used_fallback=False,
         )
-    name = str(manifest.get("name") or "")
-    dispatch = ANALYSIS_TOOL_DISPATCH.get(name)
+    dispatch = _dispatch_for_manifest(manifest, ANALYSIS_TOOL_DISPATCH)
     if dispatch is not None:
         return dispatch(payload, tool_request)
     return None
@@ -997,7 +1010,6 @@ RAW_QC_TOOL_DISPATCH: dict[str, Any] = {
 
 def _handle_raw_qc_at_tool_request(payload: RawQcChatRequest, tool_request: dict[str, object]) -> RawQcChatResponse:
     manifest = tool_request.get("manifest")
-    alias = str(tool_request.get("alias") or "")
     help_text = _resolve_tool_help_response(tool_request)
     if help_text is not None:
         return RawQcChatResponse(answer=help_text, citations=[], used_fallback=False)
@@ -1006,15 +1018,14 @@ def _handle_raw_qc_at_tool_request(payload: RawQcChatRequest, tool_request: dict
         return RawQcChatResponse(answer=mismatch_text, citations=[], used_fallback=False)
     if manifest is None:
         return RawQcChatResponse(
-            answer=f"`@{alias}` is not a registered ChatGenome tool.",
+            answer=_unknown_tool_answer(tool_request),
             citations=[],
             used_fallback=False,
         )
-    name = str(manifest.get("name") or "")
-    dispatch = RAW_QC_TOOL_DISPATCH.get(name)
+    dispatch = _dispatch_for_manifest(manifest, RAW_QC_TOOL_DISPATCH)
     if dispatch is not None:
         return dispatch(payload, tool_request)
-    return RawQcChatResponse(answer=f"`@{alias}` is not a registered ChatGenome tool.", citations=[], used_fallback=False)
+    return RawQcChatResponse(answer=_unknown_tool_answer(tool_request), citations=[], used_fallback=False)
 
 
 def _handle_raw_qc_skill_request(payload: RawQcChatRequest, skill_request: dict[str, object]) -> RawQcChatResponse:
@@ -1065,7 +1076,6 @@ def _handle_summary_stats_at_tool_request(
     payload: SummaryStatsChatRequest, tool_request: dict[str, object]
 ) -> SummaryStatsChatResponse:
     manifest = tool_request.get("manifest")
-    alias = str(tool_request.get("alias") or "")
     help_text = _resolve_tool_help_response(tool_request)
     if help_text is not None:
         return SummaryStatsChatResponse(answer=help_text, citations=[], used_fallback=False)
@@ -1074,16 +1084,14 @@ def _handle_summary_stats_at_tool_request(
         return SummaryStatsChatResponse(answer=mismatch_text, citations=[], used_fallback=False)
     if manifest is None:
         return SummaryStatsChatResponse(
-            answer=f"`@{alias}` is not a registered ChatGenome tool.",
+            answer=_unknown_tool_answer(tool_request),
             citations=[],
             used_fallback=False,
         )
-
-    name = str(manifest.get("name") or "")
-    dispatch = SUMMARY_STATS_TOOL_DISPATCH.get(name)
+    dispatch = _dispatch_for_manifest(manifest, SUMMARY_STATS_TOOL_DISPATCH)
     if dispatch is not None:
         return dispatch(payload, tool_request)
-    return SummaryStatsChatResponse(answer=f"`@{alias}` is not a registered ChatGenome tool.", citations=[], used_fallback=False)
+    return SummaryStatsChatResponse(answer=_unknown_tool_answer(tool_request), citations=[], used_fallback=False)
 
 
 def _dispatch_summary_stats_qqman(
