@@ -30,6 +30,7 @@ Workflow registry drafts for future `@skill process_name` execution live under:
 - `skills/chatgenome-orchestrator/workflows/representative_vcf_review.json`
 - `skills/chatgenome-orchestrator/workflows/raw_qc_review.json`
 - `skills/chatgenome-orchestrator/workflows/summary_stats_review.json`
+- `skills/chatgenome-orchestrator/workflows/prs_prep.json`
 
 ## Initial tool ordering
 
@@ -134,6 +135,7 @@ The chat layer should separate general conversation from grounded Studio interpr
 
 - After summary statistics review, prefer follow-up suggestions such as Manhattan plot, QQ plot, PRS preparation, harmonization, and post-GWAS next steps.
 - Do not automatically generate follow-up plots unless the workflow explicitly requires it or the user explicitly asks for them.
+- `@skill prs_prep` should prepare build check and harmonization readiness before any PLINK score-file generation step.
 - General statistical or genetics questions without grounding triggers should be answered as normal GPT responses.
 
 ## Interpretation policy

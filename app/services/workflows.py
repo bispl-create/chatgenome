@@ -10,6 +10,7 @@ from app.models import (
     AnalysisResponse,
     CountSummaryItem,
     DetailedCountSummaryItem,
+    PrsPrepResponse,
     RawQcResponse,
     RankedCandidate,
     RohSegment,
@@ -24,6 +25,7 @@ from app.services.fastqc import FASTQC_OUTPUT_DIR
 from app.services.recommendation import build_recommendations
 from app.services.references import build_reference_bundle
 from app.services.roh_analysis import run_roh_analysis
+from app.services.prs_prep import analyze_prs_prep
 from app.services.summary_stats import analyze_summary_stats
 from app.services.tool_runner import discover_tools, run_tool
 from app.services.variant_annotation import annotate_variants
@@ -363,3 +365,12 @@ def analyze_summary_stats_workflow(
     result.tool_registry = discover_tools()
     return result
 
+
+def analyze_prs_prep_workflow(
+    path: str,
+    original_name: str,
+    genome_build: str = "unknown",
+) -> PrsPrepResponse:
+    result = analyze_prs_prep(path, original_name, genome_build=genome_build)
+    result.analysis_id = str(uuid.uuid4())
+    return result

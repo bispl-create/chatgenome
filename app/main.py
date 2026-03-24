@@ -28,6 +28,8 @@ from app.models import (
     FromPathRequest,
     PlinkRequest,
     PlinkResponse,
+    PrsPrepRequest,
+    PrsPrepResponse,
     QqmanAssociationRequest,
     RankedCandidate,
     RawQcChatRequest,
@@ -73,7 +75,12 @@ from app.services.tool_runner import discover_tools, run_tool
 from app.services.variant_annotation import annotate_variants
 from app.services.vcf_summary import summarize_vcf
 from app.services.workflow_agent import interpret_workflow_reply, start_workflow
-from app.services.workflows import analyze_raw_qc_workflow, analyze_summary_stats_workflow, analyze_vcf_workflow
+from app.services.workflows import (
+    analyze_prs_prep_workflow,
+    analyze_raw_qc_workflow,
+    analyze_summary_stats_workflow,
+    analyze_vcf_workflow,
+)
 
 
 def _load_local_env() -> None:
@@ -889,6 +896,20 @@ async def analyze_summary_stats_rows(request: SummaryStatsRowsRequest) -> Summar
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Summary statistics row loading failed: {exc}") from exc
+
+
+@app.post("/api/v1/prs-prep/run", response_model=PrsPrepResponse)
+async def run_prs_prep(request: PrsPrepRequest) -> PrsPrepResponse:
+    try:
+        return analyze_prs_prep_workflow(
+            request.source_stats_path,
+            request.file_name,
+            genome_build=request.genome_build,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"PRS prep failed: {exc}") from exc
 
 
 @app.get("/api/v1/raw-qc/report")

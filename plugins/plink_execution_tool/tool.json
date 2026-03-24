@@ -34,6 +34,10 @@
       {
         "name": "qc",
         "description": "Prepare the PLINK Studio card for frequency, missingness, and Hardy-Weinberg summaries."
+      },
+      {
+        "name": "score",
+        "description": "Run PLINK --score on the active target genotype VCF using the latest PRS prep score file."
       }
     ],
     "options": [
@@ -42,7 +46,13 @@
         "type": "string",
         "required": false,
         "default": "qc",
-        "description": "Workflow mode. The current ChatGenome build supports the qc preset."
+        "description": "Workflow mode. The current ChatGenome build supports qc and score."
+      },
+      {
+        "name": "score_file_path",
+        "type": "string",
+        "required": false,
+        "description": "Optional explicit score file path. In ChatGenome, @plink score normally uses the latest PRS prep output."
       },
       {
         "name": "freq",
@@ -76,11 +86,14 @@
     "examples": [
       "@plink help",
       "@plink",
-      "@plink mode=qc"
+      "@plink mode=qc",
+      "@plink score",
+      "@plink mode=score"
     ],
     "notes": [
       "Uses the active VCF source by default.",
-      "The current ChatGenome flow opens the PLINK Studio card, where the final QC configuration can be reviewed before execution."
+      "The current ChatGenome flow opens the PLINK Studio card, where the final QC configuration can be reviewed before execution.",
+      "For score mode, run @skill prs_prep first on a summary-statistics source, then upload a target genotype VCF and run @plink score."
     ]
   }
 }

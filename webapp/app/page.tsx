@@ -101,6 +101,7 @@ type AnalysisResponse = {
   } | null;
   plink_result?: {
     tool: string;
+    mode?: string;
     input_path: string;
     command_preview: string;
     output_prefix: string;
@@ -108,6 +109,8 @@ type AnalysisResponse = {
     freq_path?: string | null;
     missing_path?: string | null;
     hardy_path?: string | null;
+    score_file_path?: string | null;
+    score_output_path?: string | null;
     variant_count?: number | null;
     sample_count?: number | null;
     freq_rows: Array<{
@@ -131,6 +134,15 @@ type AnalysisResponse = {
       expected_hets?: number | null;
       p_value?: number | null;
     }>;
+    score_rows: Array<{
+      sample_id: string;
+      allele_ct?: number | null;
+      named_allele_dosage_sum?: number | null;
+      score_sum?: number | null;
+    }>;
+    score_mean?: number | null;
+    score_min?: number | null;
+    score_max?: number | null;
     warnings: string[];
   } | null;
   liftover_result?: {
@@ -308,6 +320,7 @@ type SummaryStatsResponse = {
   preview_rows: Array<Record<string, string>>;
   warnings: string[];
   qqman_result?: RPlotResponse | null;
+  prs_prep_result?: PrsPrepResponse | null;
   draft_answer: string;
   used_tools?: string[];
   tool_registry?: Array<{
@@ -335,6 +348,7 @@ type SummaryStatsChatResponse = {
   requested_view?: StudioView | null;
   analysis?: SummaryStatsResponse | null;
   qqman_result?: RPlotResponse | null;
+  prs_prep_result?: PrsPrepResponse | null;
 };
 
 type RPlotResponse = {
@@ -388,6 +402,35 @@ type SourceReadyResponse = {
   file_kind?: string | null;
 };
 
+type PrsPrepResponse = {
+  analysis_id: string;
+  source_stats_path: string;
+  file_name: string;
+  build_check: {
+    inferred_build: string;
+    build_confidence: string;
+    source_build: string;
+    target_build: string;
+    build_match?: boolean | null;
+    warnings: string[];
+  };
+  harmonization: {
+    required_fields_present: boolean;
+    effect_size_kind: string;
+    ambiguous_snp_count: number;
+    harmonizable_preview_rows: number;
+    missing_fields: string[];
+    warnings: string[];
+  };
+  score_file_path?: string | null;
+  score_file_columns: string[];
+  score_file_preview_rows: Array<Record<string, string>>;
+  kept_rows: number;
+  dropped_rows: number;
+  score_file_ready: boolean;
+  draft_answer: string;
+};
+
 const DEFAULT_WORKFLOW_REGISTRY: WorkflowManifest[] = [
   {
     name: "representative_vcf_review",
@@ -406,6 +449,12 @@ const DEFAULT_WORKFLOW_REGISTRY: WorkflowManifest[] = [
     description: "Run the default summary statistics intake and review workflow on the active summary-stats source.",
     source_type: "summary_stats",
     default_view: "sumstats",
+  },
+  {
+    name: "prs_prep",
+    description: "Run build check, harmonization prep, and score-file preparation on the active summary-statistics source.",
+    source_type: "summary_stats",
+    default_view: "prs_prep",
   },
 ];
 
@@ -432,6 +481,7 @@ type StudioView =
   | "coverage"
   | "rawqc"
   | "sumstats"
+  | "prs_prep"
   | "qqman"
   | "samtools"
   | "snpeff"
@@ -899,6 +949,8 @@ export default function Page() {
   const [directSnpeffResult, setDirectSnpeffResult] = useState<AnalysisResponse["snpeff_result"] | null>(null);
   const [directLdblockshowResult, setDirectLdblockshowResult] = useState<AnalysisResponse["ldblockshow_result"] | null>(null);
   const [directQqmanResult, setDirectQqmanResult] = useState<RPlotResponse | null>(null);
+  const [directPrsPrepResult, setDirectPrsPrepResult] = useState<PrsPrepResponse | null>(null);
+  const [latestPrsPrepResult, setLatestPrsPrepResult] = useState<PrsPrepResponse | null>(null);
   const [annotationScope, setAnnotationScope] = useState<"representative" | "all">("representative");
   const [annotationLimit, setAnnotationLimit] = useState("200");
   const [status, setStatus] = useState("Waiting for a genomics source");
@@ -912,6 +964,7 @@ export default function Page() {
   const [activeStudioView, setActiveStudioView] = useState<StudioView | null>(null);
   const [plinkRunning, setPlinkRunning] = useState(false);
   const [plinkConfig, setPlinkConfig] = useState({
+    mode: "qc",
     runFreq: true,
     runMissing: true,
     runHardy: true,
@@ -963,8 +1016,23 @@ export default function Page() {
     return `@${normalized.replace(/_execution_tool$|_tool$|_vcf_tool$/g, "").replace(/^gatk_/, "").replace(/_/g, "")}`;
   }
   const plinkCommandPreview = useMemo(() => {
-    const inputPath = analysis?.source_vcf_path || "<source.vcf.gz>";
+    const inputPath =
+      analysis?.source_vcf_path ||
+      (activeSource?.source_type === "vcf" ? activeSource.source_path : null) ||
+      "<target-genotype.vcf.gz>";
     const outputPrefix = (plinkConfig.outputPrefix || `${analysis?.analysis_id ?? "analysis"}-plink`).trim();
+    if (plinkConfig.mode === "score") {
+      const scoreFilePath =
+        latestPrsPrepResult?.score_file_path ||
+        summaryStatsAnalysis?.prs_prep_result?.score_file_path ||
+        directPrsPrepResult?.score_file_path ||
+        "<prs_weights.tsv>";
+      const flags = [plinkConfig.allowExtraChr ? "--allow-extra-chr" : ""].filter(Boolean);
+      return `plink2 --vcf ${inputPath} dosage=DS ${flags.join(" ")} --score ${scoreFilePath} 1 2 3 header-read cols=scoresums --out ${outputPrefix}`.replace(
+        /\s+/g,
+        " ",
+      );
+    }
     const flags: string[] = [];
     if (plinkConfig.runFreq) {
       flags.push("--freq");
@@ -979,7 +1047,7 @@ export default function Page() {
       flags.push("--allow-extra-chr");
     }
     return `plink2 --vcf ${inputPath} dosage=DS ${flags.join(" ")} --out ${outputPrefix}`.trim();
-  }, [analysis, plinkConfig]);
+  }, [analysis, activeSource, plinkConfig, latestPrsPrepResult, summaryStatsAnalysis, directPrsPrepResult]);
   const normalizedComposerText = typeof composerText === "string" ? composerText.toLowerCase() : "";
   const detectedGroundingTriggers = groundingTokens.filter((token) => normalizedComposerText.includes(token));
   const detectedToolTriggers = detectToolTriggers(composerText);
@@ -1007,6 +1075,13 @@ export default function Page() {
     setSummaryStatsGridRows(summaryStatsAnalysis.preview_rows);
     setSummaryStatsHasMore(summaryStatsAnalysis.row_count > summaryStatsAnalysis.preview_rows.length);
   }, [summaryStatsAnalysis]);
+
+  useEffect(() => {
+    if (summaryStatsAnalysis?.prs_prep_result) {
+      setDirectPrsPrepResult(summaryStatsAnalysis.prs_prep_result);
+      setLatestPrsPrepResult(summaryStatsAnalysis.prs_prep_result);
+    }
+  }, [summaryStatsAnalysis?.prs_prep_result]);
 
   useEffect(() => {
     if (activeStudioView !== "sumstats" || !summaryStatsHasMore || summaryStatsRowsLoading) {
@@ -1160,6 +1235,7 @@ export default function Page() {
     if (!file) {
       return;
     }
+    const hadPreparedPrsScoreFile = Boolean(latestPrsPrepResult?.score_file_ready);
     const guessedSourceType =
       isRawQcFileName(file.name)
         ? "raw_qc"
@@ -1169,15 +1245,21 @@ export default function Page() {
     setAttachedFile(file);
     setAttachedSourceType(guessedSourceType);
     setActiveSource(null);
-    setAnalysis(null);
-    setRawQcAnalysis(null);
-    setSummaryStatsAnalysis(null);
-    setDirectLiftoverResult(null);
-    setDirectSamtoolsResult(null);
-    setDirectPlinkResult(null);
-    setDirectSnpeffResult(null);
-    setDirectLdblockshowResult(null);
-    setDirectQqmanResult(null);
+    if (guessedSourceType === "vcf") {
+      setAnalysis(null);
+      setDirectLiftoverResult(null);
+      setDirectPlinkResult(null);
+      setDirectSnpeffResult(null);
+      setDirectLdblockshowResult(null);
+    } else if (guessedSourceType === "raw_qc") {
+      setRawQcAnalysis(null);
+      setDirectSamtoolsResult(null);
+    } else if (guessedSourceType === "summary_stats") {
+      setSummaryStatsAnalysis(null);
+      setDirectQqmanResult(null);
+      setDirectPrsPrepResult(null);
+      setLatestPrsPrepResult(null);
+    }
     setFollowUpAnswer(null);
     setAnalysisQa([]);
     setActiveStudioView(null);
@@ -1214,7 +1296,9 @@ export default function Page() {
       setStatus("VCF source ready");
       addMessage({
         role: "assistant",
-        content: `VCF source \`${file.name}\` is loaded. Run \`@skill representative_vcf_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
+        content: hadPreparedPrsScoreFile
+          ? `VCF source \`${file.name}\` is loaded as a target genotype source. You can run \`@plink score\` now, or use \`@skill representative_vcf_review\` for the default review workflow.`
+          : `VCF source \`${file.name}\` is loaded. Run \`@skill representative_vcf_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
       });
     }
     event.target.value = "";
@@ -1300,17 +1384,47 @@ export default function Page() {
       return;
     }
 
+    const wantsPlinkScore =
+      alias === "plink" &&
+      (remainder.trim().toLowerCase() === "score" ||
+        options.mode?.toLowerCase() === "score");
+
+    if (alias === "plink" && activeSource.source_type === "summary_stats" && wantsPlinkScore) {
+      addMessage({
+        role: "assistant",
+        content:
+          "PLINK score needs a target genotype source in addition to the prepared summary-statistics weights.\n\n" +
+          "- Keep the current PRS prep result.\n" +
+          "- Upload a target genotype VCF.\n" +
+          "- Then run `@plink score` again.",
+      });
+      return;
+    }
+
     if (alias === "plink" && activeSource.source_type === "vcf") {
+      if (wantsPlinkScore && !latestPrsPrepResult?.score_file_ready) {
+        addMessage({
+          role: "assistant",
+          content:
+            "PLINK score needs a prepared score file.\n\n" +
+            "- Upload a summary-statistics source.\n" +
+            "- Run `@skill prs_prep`.\n" +
+            "- Then upload the target genotype VCF and run `@plink score` again.",
+        });
+        return;
+      }
       const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/plink/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           vcf_path: activeSource.source_path,
+          mode: wantsPlinkScore ? "score" : "qc",
+          score_file_path: wantsPlinkScore ? latestPrsPrepResult?.score_file_path : undefined,
           output_prefix: `${activeSource.file_name}-plink`,
           allow_extra_chr: true,
-          freq_limit: 12,
-          missing_limit: 12,
-          hardy_limit: 12,
+          freq_limit: wantsPlinkScore ? 0 : 12,
+          missing_limit: wantsPlinkScore ? 0 : 12,
+          hardy_limit: wantsPlinkScore ? 0 : 12,
         }),
       });
       if (!response.ok) {
@@ -1322,10 +1436,15 @@ export default function Page() {
       addMessage({
         role: "assistant",
         content:
-          `PLINK was run for the current VCF.\n\n` +
-          `- Variants: ${payload?.variant_count ?? "unknown"}\n` +
-          `- Samples: ${payload?.sample_count ?? "unknown"}\n` +
-          `- Outputs: afreq ${payload?.freq_rows?.length ?? 0}, missing ${payload?.missing_rows?.length ?? 0}, hardy ${payload?.hardy_rows?.length ?? 0}`,
+          wantsPlinkScore
+            ? `PLINK score was run for the current target genotype VCF.\n\n` +
+              `- Samples scored: ${payload?.score_rows?.length ?? "unknown"}\n` +
+              `- Mean score: ${payload?.score_mean != null ? payload.score_mean.toFixed(4) : "n/a"}\n` +
+              `- Output: ${payload?.score_output_path || "n/a"}`
+            : `PLINK was run for the current VCF.\n\n` +
+              `- Variants: ${payload?.variant_count ?? "unknown"}\n` +
+              `- Samples: ${payload?.sample_count ?? "unknown"}\n` +
+              `- Outputs: afreq ${payload?.freq_rows?.length ?? 0}, missing ${payload?.missing_rows?.length ?? 0}, hardy ${payload?.hardy_rows?.length ?? 0}`,
       });
       return;
     }
@@ -1513,6 +1632,59 @@ export default function Page() {
     }
   }
 
+  async function handleStartPrsPrepFromSource(sourceOverride?: SourceReadyResponse | null): Promise<PrsPrepResponse | null> {
+    const source = sourceOverride ?? activeSource;
+    if (!source || source.source_type !== "summary_stats") {
+      setError("PRS prep requires an active summary-statistics source.");
+      return null;
+    }
+
+    setError(null);
+    setStatus("Running PRS prep...");
+
+    try {
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/prs-prep/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source_stats_path: source.source_path,
+          file_name: source.file_name,
+          genome_build: summaryStatsAnalysis?.genome_build ?? "unknown",
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      const payload: PrsPrepResponse = await response.json();
+      setDirectPrsPrepResult(payload);
+      setLatestPrsPrepResult(payload);
+      setActiveStudioView("prs_prep");
+      setStatus("PRS prep ready");
+      setComposerText("");
+      addMessage({
+        role: "assistant",
+        content:
+          `PRS prep was run for \`${payload.file_name}\`.\n\n` +
+          `- Build check: ${payload.build_check.inferred_build} (${payload.build_check.build_confidence})\n` +
+          `- Score-file rows kept: ${payload.kept_rows}\n` +
+          `- Score-file rows dropped: ${payload.dropped_rows}\n` +
+          `- Score file ready: ${payload.score_file_ready ? "yes" : "no"}\n\n` +
+          "Open the PRS Prep Review card in Studio to inspect harmonization warnings and the PLINK score-file preview."
+      });
+      return payload;
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setError(message);
+      setStatus("PRS prep failed");
+      addMessage({
+        role: "assistant",
+        content: `PRS prep 중 오류가 발생했습니다: ${message}`,
+      });
+      return null;
+    }
+  }
+
   async function handleStartAnalysis(
     parsedScope?: "representative" | "all",
     parsedLimit?: string,
@@ -1665,6 +1837,10 @@ export default function Page() {
         }
         if (workflowName === "summary_stats_review" && attachedSourceType === "summary_stats") {
           await handleStartSummaryStats(attachedFile);
+          return;
+        }
+        if (workflowName === "prs_prep" && attachedSourceType === "summary_stats") {
+          await handleStartPrsPrepFromSource(activeSource);
           return;
         }
 
@@ -1840,35 +2016,45 @@ export default function Page() {
       return;
     }
 
+    const scoreMode = plinkConfig.mode === "score";
     setPlinkRunning(true);
     setStatus("Running PLINK...");
     setError(null);
     try {
+      if (scoreMode && !latestPrsPrepResult?.score_file_ready) {
+        throw new Error("Run @skill prs_prep first and provide a prepared score file before PLINK score mode.");
+      }
       const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/plink/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           vcf_path: sourceVcfPath,
+          mode: scoreMode ? "score" : "qc",
+          score_file_path: scoreMode ? latestPrsPrepResult?.score_file_path : undefined,
           output_prefix: (plinkConfig.outputPrefix || `${analysis?.analysis_id ?? "active-source"}-plink`).trim(),
           allow_extra_chr: plinkConfig.allowExtraChr,
-          freq_limit: plinkConfig.runFreq ? 12 : 0,
-          missing_limit: plinkConfig.runMissing ? 12 : 0,
-          hardy_limit: plinkConfig.runHardy ? 12 : 0,
+          freq_limit: !scoreMode && plinkConfig.runFreq ? 12 : 0,
+          missing_limit: !scoreMode && plinkConfig.runMissing ? 12 : 0,
+          hardy_limit: !scoreMode && plinkConfig.runHardy ? 12 : 0,
         }),
       });
       if (!response.ok) {
         throw new Error(await response.text());
       }
       const payload = await response.json();
-      setAnalysis((current) =>
-        current
-          ? {
-              ...current,
-              plink_result: payload,
-              used_tools: ["plink_execution_tool"],
-            }
-          : current,
-      );
+      setAnalysis((current) => {
+        if (!current) {
+          return current;
+        }
+        return {
+          ...current,
+          plink_result: payload,
+          used_tools: ["plink_execution_tool"],
+        };
+      });
+      if (!analysis) {
+        setDirectPlinkResult(payload ?? null);
+      }
       setActiveStudioView("plink");
       setStatus("PLINK ready");
     } catch (caught) {
@@ -2005,6 +2191,11 @@ export default function Page() {
       }
       if (payload.qqman_result) {
         setDirectQqmanResult(payload.qqman_result);
+      }
+      if (payload.prs_prep_result && !payload.analysis) {
+        setSummaryStatsAnalysis((current) =>
+          current ? { ...current, prs_prep_result: payload.prs_prep_result ?? null } : current,
+        );
       }
       if (payload.requested_view) {
         setActiveStudioView(payload.requested_view);
@@ -2330,10 +2521,12 @@ export default function Page() {
   const ldblockshowResultForStudio = analysis?.ldblockshow_result ?? directLdblockshowResult;
   const samtoolsResultForStudio = rawQcAnalysis?.samtools_result ?? directSamtoolsResult;
   const qqmanResultForStudio = summaryStatsAnalysis?.qqman_result ?? directQqmanResult;
+  const prsPrepResultForStudio = summaryStatsAnalysis?.prs_prep_result ?? directPrsPrepResult ?? null;
   const hasStudioState = Boolean(
     analysis ||
       rawQcAnalysis ||
       summaryStatsAnalysis ||
+      prsPrepResultForStudio ||
       qqmanResultForStudio ||
       snpeffResultForStudio ||
       plinkResultForStudio ||
@@ -2351,6 +2544,9 @@ export default function Page() {
     : summaryStatsAnalysis
       ? [
           { id: "sumstats" as StudioView, title: "Summary Stats Review", subtitle: "Post-GWAS intake and column mapping" },
+          ...(prsPrepResultForStudio
+            ? [{ id: "prs_prep" as StudioView, title: "PRS Prep Review", subtitle: "Build check, harmonization, and score-file readiness" }]
+            : []),
           ...(qqmanResultForStudio
             ? [{ id: "qqman" as StudioView, title: "qqman Plots", subtitle: "Manhattan and QQ visualization" }]
             : []),
@@ -2397,6 +2593,9 @@ export default function Page() {
           : []),
           ...(qqmanResultForStudio
           ? [{ id: "qqman" as StudioView, title: "qqman Plots", subtitle: "Manhattan and QQ visualization" }]
+          : []),
+          ...(prsPrepResultForStudio
+          ? [{ id: "prs_prep" as StudioView, title: "PRS Prep Review", subtitle: "Build check, harmonization, and score-file readiness" }]
           : []),
         ];
   const studioContext = useMemo(() => {
@@ -2847,6 +3046,131 @@ export default function Page() {
                   <div className="resultList">
                     {summaryStatsAnalysis.warnings.map((warning, index) => (
                       <article key={`sumstats-warning-${index}`} className="resultListItem resultListStatic">
+                        <strong>Warning {index + 1}</strong>
+                        <span>{warning}</span>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
+
+          {prsPrepResultForStudio && activeStudioView === "prs_prep" ? (
+            <section className="notebookPanel studioCanvasPanel">
+              <div className="notebookHeader">
+                <h2>PRS Prep Review</h2>
+              </div>
+              <div className="studioCanvasBody">
+                <div className="resultMetricGrid">
+                  <MetricTile label="Inferred build" value={prsPrepResultForStudio.build_check.inferred_build} tone="good" />
+                  <MetricTile label="Build confidence" value={prsPrepResultForStudio.build_check.build_confidence} tone="neutral" />
+                  <MetricTile
+                    label="Effect size"
+                    value={prsPrepResultForStudio.harmonization.effect_size_kind}
+                    tone="neutral"
+                  />
+                  <MetricTile
+                    label="Ready rows"
+                    value={String(prsPrepResultForStudio.kept_rows)}
+                    tone={prsPrepResultForStudio.kept_rows > 0 ? "good" : "warn"}
+                  />
+                  <MetricTile
+                    label="Dropped rows"
+                    value={String(prsPrepResultForStudio.dropped_rows)}
+                    tone="neutral"
+                  />
+                  <MetricTile
+                    label="Score file"
+                    value={prsPrepResultForStudio.score_file_ready ? "ready" : "not ready"}
+                    tone={prsPrepResultForStudio.score_file_ready ? "good" : "warn"}
+                  />
+                </div>
+                <div className="resultSectionSplit">
+                  <article className="miniCard">
+                    <h3>Build check</h3>
+                    <ul className="hintList">
+                      <li>
+                        <strong>Source build</strong>: {prsPrepResultForStudio.build_check.source_build}
+                      </li>
+                      <li>
+                        <strong>Target build</strong>: {prsPrepResultForStudio.build_check.target_build}
+                      </li>
+                      <li>
+                        <strong>Build match</strong>:{" "}
+                        {prsPrepResultForStudio.build_check.build_match == null
+                          ? "undetermined"
+                          : prsPrepResultForStudio.build_check.build_match
+                            ? "yes"
+                            : "no"}
+                      </li>
+                    </ul>
+                  </article>
+                  <article className="miniCard">
+                    <h3>Harmonization</h3>
+                    <ul className="hintList">
+                      <li>
+                        <strong>Required fields present</strong>:{" "}
+                        {prsPrepResultForStudio.harmonization.required_fields_present ? "yes" : "no"}
+                      </li>
+                      <li>
+                        <strong>Preview rows harmonizable</strong>: {prsPrepResultForStudio.harmonization.harmonizable_preview_rows}
+                      </li>
+                      <li>
+                        <strong>Ambiguous SNPs</strong>: {prsPrepResultForStudio.harmonization.ambiguous_snp_count}
+                      </li>
+                      {prsPrepResultForStudio.harmonization.missing_fields.length ? (
+                        <li>
+                          <strong>Missing fields</strong>: {prsPrepResultForStudio.harmonization.missing_fields.join(", ")}
+                        </li>
+                      ) : null}
+                    </ul>
+                  </article>
+                </div>
+                <article className="miniCard">
+                  <h3>PLINK score-file preview</h3>
+                  <p className="summaryStatsGridMeta">
+                    Columns: {prsPrepResultForStudio.score_file_columns.join(", ") || "ID, A1, BETA"}
+                  </p>
+                  <div className="variantTableWrap summaryStatsTableWrap">
+                    <table className="variantTable summaryStatsTable">
+                      <thead>
+                        <tr>
+                          {prsPrepResultForStudio.score_file_columns.map((column) => (
+                            <th key={column}>{column}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {prsPrepResultForStudio.score_file_preview_rows.map((row, index) => (
+                          <tr key={`prs-prep-preview-${index}`}>
+                            {prsPrepResultForStudio.score_file_columns.map((column) => (
+                              <td key={`${index}-${column}`}>{row[column] || ""}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="resultActionRow">
+                    {prsPrepResultForStudio.score_file_path ? (
+                      <a
+                        className="sourceAddButton"
+                        href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                          prsPrepResultForStudio.score_file_path,
+                        )}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open output
+                      </a>
+                    ) : null}
+                  </div>
+                </article>
+                {[...prsPrepResultForStudio.build_check.warnings, ...prsPrepResultForStudio.harmonization.warnings].length ? (
+                  <div className="resultList">
+                    {[...prsPrepResultForStudio.build_check.warnings, ...prsPrepResultForStudio.harmonization.warnings].map((warning, index) => (
+                      <article key={`prs-prep-warning-${index}`} className="resultListItem resultListStatic">
                         <strong>Warning {index + 1}</strong>
                         <span>{warning}</span>
                       </article>
@@ -3308,7 +3632,7 @@ export default function Page() {
               </div>
               <div className="studioCanvasBody">
                 <div className="resultMetricGrid">
-                  <MetricTile label="Mode" value="QC" tone="good" />
+                  <MetricTile label="Mode" value={plinkConfig.mode === "score" ? "Score" : "QC"} tone="good" />
                   <MetricTile
                     label="Source"
                     value={analysis?.facts.file_name ?? activeSource?.file_name ?? attachedFile?.name ?? "n/a"}
@@ -3330,6 +3654,18 @@ export default function Page() {
                     <strong>Run configuration</strong>
                     <div className="annotationMetaGrid">
                       <label className="field compactField">
+                        <span>Mode</span>
+                        <select
+                          value={plinkConfig.mode}
+                          onChange={(event) =>
+                            setPlinkConfig((current) => ({ ...current, mode: event.target.value }))
+                          }
+                        >
+                          <option value="qc">qc</option>
+                          <option value="score">score</option>
+                        </select>
+                      </label>
+                      <label className="field compactField">
                         <span>Output prefix</span>
                         <input
                           type="text"
@@ -3344,6 +3680,7 @@ export default function Page() {
                         <input
                           type="checkbox"
                           checked={plinkConfig.runFreq}
+                          disabled={plinkConfig.mode === "score"}
                           onChange={(event) =>
                             setPlinkConfig((current) => ({ ...current, runFreq: event.target.checked }))
                           }
@@ -3354,6 +3691,7 @@ export default function Page() {
                         <input
                           type="checkbox"
                           checked={plinkConfig.runMissing}
+                          disabled={plinkConfig.mode === "score"}
                           onChange={(event) =>
                             setPlinkConfig((current) => ({ ...current, runMissing: event.target.checked }))
                           }
@@ -3364,6 +3702,7 @@ export default function Page() {
                         <input
                           type="checkbox"
                           checked={plinkConfig.runHardy}
+                          disabled={plinkConfig.mode === "score"}
                           onChange={(event) =>
                             setPlinkConfig((current) => ({ ...current, runHardy: event.target.checked }))
                           }
@@ -3380,6 +3719,11 @@ export default function Page() {
                         />
                       </label>
                     </div>
+                    {plinkConfig.mode === "score" ? (
+                      <p className="resultNote">
+                        Score mode uses the latest PRS prep score file. Run <code>@skill prs_prep</code> on a summary-statistics source first, then upload a target genotype VCF and run <code>@plink score</code>.
+                      </p>
+                    ) : null}
                   </article>
                   <article className="resultListItem resultListStatic">
                     <strong>Command preview</strong>
@@ -3397,126 +3741,228 @@ export default function Page() {
                   </button>
                 </div>
                 {plinkResultForStudio ? (
-                  <>
-                    <div className="resultMetricGrid">
-                      <MetricTile
-                        label="Samples"
-                        value={
-                          plinkResultForStudio.sample_count != null ? String(plinkResultForStudio.sample_count) : "n/a"
-                        }
-                        tone="neutral"
-                      />
-                      <MetricTile
-                        label="Variants"
-                        value={
-                          plinkResultForStudio.variant_count != null ? String(plinkResultForStudio.variant_count) : "n/a"
-                        }
-                        tone="neutral"
-                      />
-                      <MetricTile label="Freq rows" value={String(plinkResultForStudio.freq_rows.length)} tone="good" />
-                      <MetricTile
-                        label="Missing rows"
-                        value={String(plinkResultForStudio.missing_rows.length)}
-                        tone="good"
-                      />
-                      <MetricTile label="Hardy rows" value={String(plinkResultForStudio.hardy_rows.length)} tone="good" />
-                      <MetricTile label="Warnings" value={String(plinkResultForStudio.warnings.length)} tone="neutral" />
-                    </div>
-                    <div className="resultList">
-                      {plinkResultForStudio.freq_rows.slice(0, 5).map((row, index) => (
-                        <article key={`plink-freq-${row.variant_id}-${index}`} className="resultListItem resultListStatic">
-                          <strong>
-                            {row.chrom}:{row.variant_id}
-                          </strong>
+                  plinkResultForStudio.mode === "score" ? (
+                    <>
+                      <div className="resultMetricGrid">
+                        <MetricTile
+                          label="Samples scored"
+                          value={
+                            plinkResultForStudio.sample_count != null
+                              ? String(plinkResultForStudio.sample_count)
+                              : String(plinkResultForStudio.score_rows.length)
+                          }
+                          tone="good"
+                        />
+                        <MetricTile
+                          label="Mean score"
+                          value={
+                            plinkResultForStudio.score_mean != null
+                              ? plinkResultForStudio.score_mean.toFixed(4)
+                              : "n/a"
+                          }
+                          tone="neutral"
+                        />
+                        <MetricTile
+                          label="Min score"
+                          value={
+                            plinkResultForStudio.score_min != null
+                              ? plinkResultForStudio.score_min.toFixed(4)
+                              : "n/a"
+                          }
+                          tone="neutral"
+                        />
+                        <MetricTile
+                          label="Max score"
+                          value={
+                            plinkResultForStudio.score_max != null
+                              ? plinkResultForStudio.score_max.toFixed(4)
+                              : "n/a"
+                          }
+                          tone="neutral"
+                        />
+                        <MetricTile
+                          label="Preview rows"
+                          value={String(plinkResultForStudio.score_rows.length)}
+                          tone="good"
+                        />
+                        <MetricTile label="Warnings" value={String(plinkResultForStudio.warnings.length)} tone="neutral" />
+                      </div>
+                      <div className="resultList">
+                        <article className="resultListItem resultListStatic">
+                          <strong>PRS score inputs</strong>
                           <span>
-                            {row.ref_allele}&gt;{row.alt_allele} | AF{" "}
-                            {row.alt_freq != null ? row.alt_freq.toFixed(4) : "n/a"} | OBS{" "}
-                            {row.observation_count ?? "n/a"}
+                            Target genotype: {plinkResultForStudio.input_path}
+                          </span>
+                          <span>
+                            Score file: {plinkResultForStudio.score_file_path || "n/a"}
                           </span>
                         </article>
-                      ))}
-                      {plinkResultForStudio.missing_rows.slice(0, 3).map((row, index) => (
-                        <article
-                          key={`plink-missing-${row.sample_id}-${index}`}
-                          className="resultListItem resultListStatic"
-                        >
-                          <strong>Missingness {row.sample_id}</strong>
-                          <span>
-                            {row.missing_genotype_count} missing / {row.observation_count} obs | rate{" "}
-                            {(row.missing_rate * 100).toFixed(2)}%
-                          </span>
-                        </article>
-                      ))}
-                      {plinkResultForStudio.hardy_rows.slice(0, 5).map((row, index) => (
-                        <article key={`plink-hardy-${row.variant_id}-${index}`} className="resultListItem resultListStatic">
-                          <strong>
-                            Hardy {row.chrom}:{row.variant_id}
-                          </strong>
-                          <span>
-                            obs het {row.observed_hets ?? "n/a"} | exp het{" "}
-                            {row.expected_hets != null ? row.expected_hets.toFixed(2) : "n/a"} | p{" "}
-                            {row.p_value != null ? row.p_value.toExponential(3) : "n/a"}
-                          </span>
-                        </article>
-                      ))}
-                      {plinkResultForStudio.warnings.map((warning, index) => (
-                        <article key={`plink-warning-${index}`} className="resultListItem resultListStatic">
-                          <strong>Warning {index + 1}</strong>
-                          <span>{warning}</span>
-                        </article>
-                      ))}
-                    </div>
-                    <div className="resultActionRow">
-                      {plinkResultForStudio.freq_path ? (
-                        <a
-                          className="sourceAddButton"
-                          href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            plinkResultForStudio.freq_path,
-                          )}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Open afreq
-                        </a>
-                      ) : null}
-                      {plinkResultForStudio.missing_path ? (
-                        <a
-                          className="sourceAddButton"
-                          href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            plinkResultForStudio.missing_path,
-                          )}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Open smiss
-                        </a>
-                      ) : null}
-                      {plinkResultForStudio.hardy_path ? (
-                        <a
-                          className="sourceAddButton"
-                          href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            plinkResultForStudio.hardy_path,
-                          )}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Open hardy
-                        </a>
-                      ) : null}
-                      {plinkResultForStudio.log_path ? (
-                        <a
-                          className="sourceAddButton"
-                          href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            plinkResultForStudio.log_path,
-                          )}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Open log
-                        </a>
-                      ) : null}
-                    </div>
-                  </>
+                        {plinkResultForStudio.score_rows.slice(0, 10).map((row, index) => (
+                          <article key={`plink-score-${row.sample_id}-${index}`} className="resultListItem resultListStatic">
+                            <strong>{row.sample_id}</strong>
+                            <span>
+                              allele ct {row.allele_ct != null ? row.allele_ct.toFixed(2) : "n/a"} | dosage sum{" "}
+                              {row.named_allele_dosage_sum != null ? row.named_allele_dosage_sum.toFixed(2) : "n/a"} | score{" "}
+                              {row.score_sum != null ? row.score_sum.toFixed(4) : "n/a"}
+                            </span>
+                          </article>
+                        ))}
+                        {plinkResultForStudio.warnings.map((warning, index) => (
+                          <article key={`plink-warning-${index}`} className="resultListItem resultListStatic">
+                            <strong>Warning {index + 1}</strong>
+                            <span>{warning}</span>
+                          </article>
+                        ))}
+                      </div>
+                      <div className="resultActionRow">
+                        {plinkResultForStudio.score_output_path ? (
+                          <a
+                            className="sourceAddButton"
+                            href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                              plinkResultForStudio.score_output_path,
+                            )}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open output
+                          </a>
+                        ) : null}
+                        {plinkResultForStudio.log_path ? (
+                          <a
+                            className="sourceAddButton"
+                            href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                              plinkResultForStudio.log_path,
+                            )}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open log
+                          </a>
+                        ) : null}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="resultMetricGrid">
+                        <MetricTile
+                          label="Samples"
+                          value={
+                            plinkResultForStudio.sample_count != null ? String(plinkResultForStudio.sample_count) : "n/a"
+                          }
+                          tone="neutral"
+                        />
+                        <MetricTile
+                          label="Variants"
+                          value={
+                            plinkResultForStudio.variant_count != null ? String(plinkResultForStudio.variant_count) : "n/a"
+                          }
+                          tone="neutral"
+                        />
+                        <MetricTile label="Freq rows" value={String(plinkResultForStudio.freq_rows.length)} tone="good" />
+                        <MetricTile
+                          label="Missing rows"
+                          value={String(plinkResultForStudio.missing_rows.length)}
+                          tone="good"
+                        />
+                        <MetricTile label="Hardy rows" value={String(plinkResultForStudio.hardy_rows.length)} tone="good" />
+                        <MetricTile label="Warnings" value={String(plinkResultForStudio.warnings.length)} tone="neutral" />
+                      </div>
+                      <div className="resultList">
+                        {plinkResultForStudio.freq_rows.slice(0, 5).map((row, index) => (
+                          <article key={`plink-freq-${row.variant_id}-${index}`} className="resultListItem resultListStatic">
+                            <strong>
+                              {row.chrom}:{row.variant_id}
+                            </strong>
+                            <span>
+                              {row.ref_allele}&gt;{row.alt_allele} | AF{" "}
+                              {row.alt_freq != null ? row.alt_freq.toFixed(4) : "n/a"} | OBS{" "}
+                              {row.observation_count ?? "n/a"}
+                            </span>
+                          </article>
+                        ))}
+                        {plinkResultForStudio.missing_rows.slice(0, 3).map((row, index) => (
+                          <article
+                            key={`plink-missing-${row.sample_id}-${index}`}
+                            className="resultListItem resultListStatic"
+                          >
+                            <strong>Missingness {row.sample_id}</strong>
+                            <span>
+                              {row.missing_genotype_count} missing / {row.observation_count} obs | rate{" "}
+                              {(row.missing_rate * 100).toFixed(2)}%
+                            </span>
+                          </article>
+                        ))}
+                        {plinkResultForStudio.hardy_rows.slice(0, 5).map((row, index) => (
+                          <article key={`plink-hardy-${row.variant_id}-${index}`} className="resultListItem resultListStatic">
+                            <strong>
+                              Hardy {row.chrom}:{row.variant_id}
+                            </strong>
+                            <span>
+                              obs het {row.observed_hets ?? "n/a"} | exp het{" "}
+                              {row.expected_hets != null ? row.expected_hets.toFixed(2) : "n/a"} | p{" "}
+                              {row.p_value != null ? row.p_value.toExponential(3) : "n/a"}
+                            </span>
+                          </article>
+                        ))}
+                        {plinkResultForStudio.warnings.map((warning, index) => (
+                          <article key={`plink-warning-${index}`} className="resultListItem resultListStatic">
+                            <strong>Warning {index + 1}</strong>
+                            <span>{warning}</span>
+                          </article>
+                        ))}
+                      </div>
+                      <div className="resultActionRow">
+                        {plinkResultForStudio.freq_path ? (
+                          <a
+                            className="sourceAddButton"
+                            href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                              plinkResultForStudio.freq_path,
+                            )}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open afreq
+                          </a>
+                        ) : null}
+                        {plinkResultForStudio.missing_path ? (
+                          <a
+                            className="sourceAddButton"
+                            href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                              plinkResultForStudio.missing_path,
+                            )}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open smiss
+                          </a>
+                        ) : null}
+                        {plinkResultForStudio.hardy_path ? (
+                          <a
+                            className="sourceAddButton"
+                            href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                              plinkResultForStudio.hardy_path,
+                            )}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open hardy
+                          </a>
+                        ) : null}
+                        {plinkResultForStudio.log_path ? (
+                          <a
+                            className="sourceAddButton"
+                            href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                              plinkResultForStudio.log_path,
+                            )}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open log
+                          </a>
+                        ) : null}
+                      </div>
+                    </>
+                  )
                 ) : (
                   <p className="emptyState">No PLINK result is available yet. Configure the run and execute it from this card.</p>
                 )}

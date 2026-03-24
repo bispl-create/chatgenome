@@ -1,0 +1,15 @@
+{
+  "name": "prs_prep",
+  "description": "Run build check and harmonization preparation for the active summary-statistics source before PLINK score-file generation.",
+  "source_type": "summary_stats",
+  "steps": [
+    "build_check",
+    "harmonization_prep",
+    "score_file_prep"
+  ],
+  "default_view": "sumstats",
+  "notes": [
+    "The current implementation completes build check and harmonization readiness only.",
+    "Score-file generation is intentionally deferred to the next implementation stage."
+  ]
+}

@@ -296,6 +296,7 @@ class SummaryStatsResponse(BaseModel):
     preview_rows: list[dict[str, str]] = []
     warnings: list[str] = []
     qqman_result: Optional[RPlotResponse] = None
+    prs_prep_result: Optional[PrsPrepResponse] = None
     draft_answer: str
     used_tools: list[str] = []
     tool_registry: list[ToolInfo] = []
@@ -328,6 +329,46 @@ class SummaryStatsChatResponse(BaseModel):
     requested_view: Optional[str] = None
     analysis: Optional[SummaryStatsResponse] = None
     qqman_result: Optional[RPlotResponse] = None
+    prs_prep_result: Optional[PrsPrepResponse] = None
+
+
+class PrsPrepBuildCheck(BaseModel):
+    inferred_build: str = "unknown"
+    build_confidence: str = "low"
+    source_build: str = "unknown"
+    target_build: str = "unknown"
+    build_match: Optional[bool] = None
+    warnings: list[str] = []
+
+
+class PrsPrepHarmonizationResult(BaseModel):
+    required_fields_present: bool
+    effect_size_kind: str = "unknown"
+    ambiguous_snp_count: int = 0
+    harmonizable_preview_rows: int = 0
+    missing_fields: list[str] = []
+    warnings: list[str] = []
+
+
+class PrsPrepResponse(BaseModel):
+    analysis_id: str
+    source_stats_path: str
+    file_name: str
+    build_check: PrsPrepBuildCheck
+    harmonization: PrsPrepHarmonizationResult
+    score_file_path: Optional[str] = None
+    score_file_columns: list[str] = []
+    score_file_preview_rows: list[dict[str, str]] = []
+    kept_rows: int = 0
+    dropped_rows: int = 0
+    score_file_ready: bool = False
+    draft_answer: str
+
+
+class PrsPrepRequest(BaseModel):
+    source_stats_path: str
+    file_name: str
+    genome_build: str = "unknown"
 
 
 class WorkflowStartRequest(BaseModel):
@@ -465,6 +506,8 @@ class SamtoolsResponse(BaseModel):
 
 class PlinkRequest(BaseModel):
     vcf_path: str = Field(..., description="Absolute path to the input VCF or VCF.gz")
+    mode: Literal["qc", "score"] = Field(default="qc", description="PLINK workflow mode")
+    score_file_path: Optional[str] = Field(default=None, description="Absolute path to a PLINK --score file")
     output_prefix: Optional[str] = Field(
         default=None,
         description="Optional output prefix. Files are written under the app PLINK output directory.",
@@ -499,8 +542,16 @@ class PlinkHardyRow(BaseModel):
     p_value: Optional[float] = None
 
 
+class PlinkScoreRow(BaseModel):
+    sample_id: str
+    allele_ct: Optional[float] = None
+    named_allele_dosage_sum: Optional[float] = None
+    score_sum: Optional[float] = None
+
+
 class PlinkResponse(BaseModel):
     tool: str
+    mode: str = "qc"
     input_path: str
     command_preview: str
     output_prefix: str
@@ -508,11 +559,17 @@ class PlinkResponse(BaseModel):
     freq_path: Optional[str] = None
     missing_path: Optional[str] = None
     hardy_path: Optional[str] = None
+    score_file_path: Optional[str] = None
+    score_output_path: Optional[str] = None
     variant_count: Optional[int] = None
     sample_count: Optional[int] = None
     freq_rows: list[PlinkFreqRow] = []
     missing_rows: list[PlinkMissingRow] = []
     hardy_rows: list[PlinkHardyRow] = []
+    score_rows: list[PlinkScoreRow] = []
+    score_mean: Optional[float] = None
+    score_min: Optional[float] = None
+    score_max: Optional[float] = None
     warnings: list[str] = []
 
 

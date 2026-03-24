@@ -34,7 +34,12 @@ from app.services.plink import run_plink
 from app.services.r_vcf_plots import run_qqman_association
 from app.services.samtools import run_samtools
 from app.services.snpeff import run_snpeff
-from app.services.workflows import analyze_raw_qc_workflow, analyze_summary_stats_workflow, analyze_vcf_workflow
+from app.services.workflows import (
+    analyze_prs_prep_workflow,
+    analyze_raw_qc_workflow,
+    analyze_summary_stats_workflow,
+    analyze_vcf_workflow,
+)
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 PLUGINS_DIR = ROOT_DIR / "plugins"
@@ -261,6 +266,7 @@ def _render_skill_help(source_type: str | None = None, selected: dict[str, objec
         lines.append("- `@skill raw_qc_review`")
     elif source_type == "summary_stats":
         lines.append("- `@skill summary_stats_review`")
+        lines.append("- `@skill prs_prep`")
     else:
         lines.append("- `@skill help`")
         lines.append("- `@skill representative_vcf_review`")
@@ -1229,6 +1235,37 @@ def answer_summary_stats_chat(payload: SummaryStatsChatRequest) -> SummaryStatsC
                     used_fallback=False,
                     requested_view="sumstats",
                     analysis=refreshed,
+                )
+            if workflow_name == "prs_prep":
+                source_stats_path = payload.analysis.source_stats_path
+                if not source_stats_path:
+                    return SummaryStatsChatResponse(
+                        answer="The active summary-statistics session does not expose a durable source file path, so PRS preparation cannot be run from chat.",
+                        citations=[],
+                        used_fallback=False,
+                    )
+                prs_prep_result = analyze_prs_prep_workflow(
+                    source_stats_path,
+                    payload.analysis.file_name,
+                    genome_build=payload.analysis.genome_build,
+                )
+                refreshed = payload.analysis.model_copy(update={"prs_prep_result": prs_prep_result})
+                return SummaryStatsChatResponse(
+                    answer=(
+                        "The prs_prep workflow was run on the active summary-statistics source.\n\n"
+                        f"- Workflow: `{workflow_name}`\n"
+                        f"- Active file: `{prs_prep_result.file_name}`\n"
+                        f"- Build check: {prs_prep_result.build_check.inferred_build} ({prs_prep_result.build_check.build_confidence})\n"
+                        f"- Score-file rows kept: {prs_prep_result.kept_rows}\n"
+                        f"- Score-file rows dropped: {prs_prep_result.dropped_rows}\n"
+                        f"- Score file ready: {'yes' if prs_prep_result.score_file_ready else 'no'}\n\n"
+                        "The PRS Prep Review state has been added to Studio. Use `$studio ...` to ask grounded questions about build check, harmonization, or score-file readiness."
+                    ),
+                    citations=[],
+                    used_fallback=False,
+                    requested_view="prs_prep",
+                    analysis=refreshed,
+                    prs_prep_result=prs_prep_result,
                 )
             return SummaryStatsChatResponse(
                 answer=f"`@skill {workflow_name}` is registered but not yet executable in summary-statistics chat.",
