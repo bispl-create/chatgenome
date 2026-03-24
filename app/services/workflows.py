@@ -392,6 +392,49 @@ def analyze_raw_qc_workflow(path: str, original_name: str) -> RawQcResponse:
         raise RuntimeError(f"Raw QC failed: {exc}") from exc
 
 
+def run_registered_analysis_workflow(
+    workflow_name: str,
+    analysis: AnalysisResponse,
+) -> dict[str, object]:
+    manifest = load_workflow_manifest(workflow_name)
+    if manifest is None:
+        raise ValueError(f"Unknown analysis workflow: {workflow_name}")
+    source_type = str(manifest.get("source_type") or "").strip().lower()
+    if source_type != "vcf":
+        raise ValueError(f"Workflow {workflow_name} is not registered for VCF sources.")
+
+    requires = [str(item).strip() for item in manifest.get("requires", []) if str(item).strip()]
+    if "source_vcf_path" in requires and not analysis.source_vcf_path:
+        raise RuntimeError(
+            "The active analysis does not expose a source VCF path, so this workflow cannot be rerun from chat."
+        )
+
+    if workflow_name == "representative_vcf_review":
+        refreshed = analyze_vcf_workflow(
+            analysis.source_vcf_path or "",
+            annotation_scope="representative",
+            annotation_limit=None,
+        )
+        requested_view = str(manifest.get("requested_view") or "summary")
+        answer = (
+            "The representative VCF review workflow was rerun on the active source.\n\n"
+            f"- Workflow: `{workflow_name}`\n"
+            f"- Active file: `{refreshed.facts.file_name}`\n"
+            f"- Logged tools: {', '.join(refreshed.used_tools or []) or 'none'}\n"
+            f"- Candidate variants: {len(refreshed.candidate_variants or [])}\n\n"
+            "The active VCF analysis state has been refreshed. Open Studio cards or ask follow-up questions. Use `$studio ...` if you want the answer grounded in the current VCF review state."
+        )
+        return {
+            "answer": answer,
+            "analysis": refreshed,
+            "requested_view": requested_view,
+        }
+
+    raise NotImplementedError(
+        f"Workflow {workflow_name} is registered but not yet executable in the generic analysis runner."
+    )
+
+
 def run_registered_raw_qc_workflow(
     workflow_name: str,
     analysis: RawQcResponse,

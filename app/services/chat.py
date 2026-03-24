@@ -36,6 +36,7 @@ from app.services.r_vcf_plots import run_qqman_association
 from app.services.samtools import run_samtools
 from app.services.snpeff import run_snpeff
 from app.services.workflows import (
+    run_registered_analysis_workflow,
     analyze_prs_prep_workflow,
     analyze_raw_qc_workflow,
     analyze_summary_stats_workflow,
@@ -932,26 +933,16 @@ def _handle_analysis_skill_request(payload: AnalysisChatRequest, skill_request: 
         )
     workflow_name = str(manifest.get("name") or "")
     if workflow_name == "representative_vcf_review":
-        source_vcf_path = payload.analysis.source_vcf_path
-        if not source_vcf_path:
-            return AnalysisChatResponse(
-                answer="The active analysis does not expose a source VCF path, so this workflow cannot be rerun from chat.",
-                citations=[],
-                used_fallback=False,
-            )
-        refreshed = analyze_vcf_workflow(source_vcf_path, annotation_scope="representative", annotation_limit=None)
+        workflow_result = run_registered_analysis_workflow(
+            workflow_name,
+            payload.analysis,
+        )
         return AnalysisChatResponse(
-            answer=(
-                "The representative VCF review workflow was rerun on the active source.\n\n"
-                f"- Workflow: `{workflow_name}`\n"
-                f"- Active file: `{refreshed.facts.file_name}`\n"
-                f"- Logged tools: {', '.join(refreshed.used_tools or []) or 'none'}\n"
-                f"- Candidate variants: {len(refreshed.candidate_variants or [])}\n\n"
-                "The active VCF analysis state has been refreshed. Open Studio cards or ask follow-up questions. Use `$studio ...` if you want the answer grounded in the current VCF review state."
-            ),
+            answer=str(workflow_result["answer"]),
             citations=[],
             used_fallback=False,
-            analysis=refreshed,
+            requested_view=str(workflow_result.get("requested_view") or "summary"),
+            analysis=workflow_result.get("analysis"),
         )
     return AnalysisChatResponse(
         answer=f"`@skill {workflow_name}` is registered but not yet executable in analysis chat.",
