@@ -572,13 +572,42 @@ def _render_skill_help(source_type: str | None = None, selected: dict[str, objec
                 lines.append("")
                 lines.append("Steps")
                 for step in steps:
-                    step_name = str(step).strip()
+                    if isinstance(step, dict):
+                        step_name = str(step.get("tool") or "").strip()
+                        bind_name = str(step.get("bind") or "").strip()
+                        needs = [
+                            str(value).strip()
+                            for value in step.get("needs", [])
+                            if str(value).strip()
+                        ]
+                        on_fail = str(step.get("on_fail") or "").strip().lower()
+                    else:
+                        step_name = str(step).strip()
+                        bind_name = ""
+                        needs = []
+                        on_fail = ""
                     manifest = tool_lookup.get(step_name)
                     if manifest is not None:
                         step_description = str(manifest.get("description") or "").strip()
-                        lines.append(f"- `{step_name}`: {step_description}")
+                        detail_parts: list[str] = []
+                        if bind_name:
+                            detail_parts.append(f"binds `{bind_name}`")
+                        if needs:
+                            detail_parts.append(f"needs `{', '.join(needs)}`")
+                        if on_fail == "continue":
+                            detail_parts.append("continues on failure")
+                        detail_text = f" ({'; '.join(detail_parts)})" if detail_parts else ""
+                        lines.append(f"- `{step_name}`: {step_description}{detail_text}")
                     else:
-                        lines.append(f"- `{step_name}`")
+                        detail_parts = []
+                        if bind_name:
+                            detail_parts.append(f"binds `{bind_name}`")
+                        if needs:
+                            detail_parts.append(f"needs `{', '.join(needs)}`")
+                        if on_fail == "continue":
+                            detail_parts.append("continues on failure")
+                        detail_text = f" ({'; '.join(detail_parts)})" if detail_parts else ""
+                        lines.append(f"- `{step_name}`{detail_text}")
     lines.append("")
     lines.append("Examples")
     if source_type == "vcf":

@@ -387,11 +387,20 @@ type RawQcChatResponse = {
   samtools_result?: RawQcResponse["samtools_result"];
 };
 
+type WorkflowStep =
+  | string
+  | {
+      tool?: string;
+      bind?: string;
+      needs?: string[];
+      on_fail?: string;
+    };
+
 type WorkflowManifest = {
   name: string;
   description: string;
   source_type: "vcf" | "raw_qc" | "summary_stats" | string;
-  steps?: string[];
+  steps?: WorkflowStep[];
   default_view?: string | null;
 };
 
@@ -510,6 +519,31 @@ type RohStudioSegment = {
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function describeWorkflowStep(step: WorkflowStep, availableTools: Record<string, string>) {
+  if (typeof step === "string") {
+    return `- \`${step}\`${availableTools[step] ? `: ${availableTools[step]}` : ""}`;
+  }
+
+  const toolName = String(step?.tool ?? "").trim();
+  const bindName = String(step?.bind ?? "").trim();
+  const needs = Array.isArray(step?.needs)
+    ? step.needs.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  const onFail = String(step?.on_fail ?? "").trim().toLowerCase();
+  const detailParts: string[] = [];
+  if (bindName) {
+    detailParts.push(`binds \`${bindName}\``);
+  }
+  if (needs.length) {
+    detailParts.push(`needs \`${needs.join(", ")}\``);
+  }
+  if (onFail === "continue") {
+    detailParts.push("continues on failure");
+  }
+  const details = detailParts.length ? ` (${detailParts.join("; ")})` : "";
+  return `- \`${toolName}\`${availableTools[toolName] ? `: ${availableTools[toolName]}` : ""}${details}`;
 }
 
 function isRawQcFileName(fileName: string) {
@@ -1229,7 +1263,7 @@ export default function Page() {
     if (workflow.steps?.length) {
       lines.push("", "Steps");
       workflow.steps.forEach((step) => {
-        lines.push(`- \`${step}\`${availableTools[step] ? `: ${availableTools[step]}` : ""}`);
+        lines.push(describeWorkflowStep(step, availableTools));
       });
     }
     lines.push("", "Examples", `- \`@skill ${workflow.name}\``, `- \`@skill ${workflow.name} help\``);

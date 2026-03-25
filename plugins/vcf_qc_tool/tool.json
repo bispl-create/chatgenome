@@ -4,5 +4,16 @@
   "task": "vcf-qc",
   "modality": "genomics",
   "approval_required": false,
-  "source": "internal"
+  "source": "internal",
+  "workflow_binding": {
+    "source_type": "vcf",
+    "input_map": {
+      "vcf_path": "$source_vcf_path",
+      "max_examples": "$max_examples"
+    },
+    "result_path": "facts",
+    "transform": "analysis_facts",
+    "used_tools_label": "vcf_qc_tool",
+    "fallback_transform": "vcf_qc_summary"
+  }
 }
