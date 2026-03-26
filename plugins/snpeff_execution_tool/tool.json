@@ -28,6 +28,13 @@
     "allow_cpu_fallback": true,
     "estimated_runtime_sec": 8
   },
+  "direct_chat": {
+    "source_type": "vcf",
+    "endpoint": "snpeff",
+    "argument_mode": "key_value",
+    "requested_view": "snpeff",
+    "result_kind": "snpeff_result"
+  },
   "help": {
     "summary": "Run local SnpEff effect annotation on the active VCF source and preview annotated ANN records.",
     "modes": [

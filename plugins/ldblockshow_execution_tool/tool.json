@@ -28,6 +28,13 @@
     "allow_cpu_fallback": true,
     "estimated_runtime_sec": 6
   },
+  "direct_chat": {
+    "source_type": "vcf",
+    "endpoint": "ldblockshow",
+    "argument_mode": "region_or_key_value",
+    "requested_view": "ldblockshow",
+    "result_kind": "ldblockshow_result"
+  },
   "help": {
     "summary": "Run LDBlockShow on the active VCF source for a requested locus and generate LD heatmap artifacts.",
     "modes": [

@@ -28,6 +28,15 @@
     "allow_cpu_fallback": true,
     "estimated_runtime_sec": 10
   },
+  "direct_chat": {
+    "source_type": "vcf",
+    "endpoint": "plink",
+    "argument_mode": "mode_or_key_value",
+    "requested_view": "plink",
+    "result_kind": "plink_result",
+    "modes": ["qc", "score"],
+    "default_mode": "qc"
+  },
   "help": {
     "summary": "Open the curated PLINK 2 QC workflow for the active VCF source.",
     "modes": [

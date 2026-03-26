@@ -28,6 +28,13 @@
     "allow_cpu_fallback": true,
     "estimated_runtime_sec": 20
   },
+  "direct_chat": {
+    "source_type": "vcf",
+    "endpoint": "liftover",
+    "argument_mode": "key_value",
+    "requested_view": "liftover",
+    "result_kind": "liftover_result"
+  },
   "help": {
     "summary": "Lift the current active VCF from one genome build to another with GATK LiftoverVcf.",
     "modes": [

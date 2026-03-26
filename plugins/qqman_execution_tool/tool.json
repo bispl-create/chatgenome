@@ -28,6 +28,13 @@
     "allow_cpu_fallback": true,
     "estimated_runtime_sec": 10
   },
+  "direct_chat": {
+    "source_type": "summary_stats",
+    "endpoint": "qqman",
+    "argument_mode": "key_value",
+    "requested_view": "qqman",
+    "result_kind": "qqman_result"
+  },
   "help": {
     "summary": "Render qqman Manhattan and QQ plots for the active GWAS summary-statistics source.",
     "modes": [

@@ -105,6 +105,11 @@ def infer_tool_source_types(manifest: dict[str, object]) -> list[str]:
 
 
 def infer_tool_result_kind(manifest: dict[str, object]) -> str | None:
+    direct_chat = manifest.get("direct_chat")
+    if isinstance(direct_chat, dict):
+        result_kind = str(direct_chat.get("result_kind") or "").strip()
+        if result_kind:
+            return result_kind
     routing = manifest.get("routing")
     if isinstance(routing, dict):
         result_slot = str(routing.get("result_slot") or "").strip()
@@ -118,7 +123,21 @@ def infer_tool_result_kind(manifest: dict[str, object]) -> str | None:
     return None
 
 
+def tool_direct_chat_metadata(manifest: dict[str, object]) -> dict[str, Any]:
+    direct_chat = manifest.get("direct_chat")
+    if not isinstance(direct_chat, dict):
+        return {}
+    payload = dict(direct_chat)
+    payload.setdefault("source_type", next(iter(infer_tool_source_types(manifest)), ""))
+    payload.setdefault("result_kind", infer_tool_result_kind(manifest))
+    payload.setdefault("aliases", tool_aliases(manifest))
+    payload.setdefault("name", str(manifest.get("name") or "").strip())
+    payload.setdefault("help_supported", isinstance(manifest.get("help"), dict))
+    return payload
+
+
 def tool_chat_metadata(manifest: dict[str, object]) -> dict[str, Any]:
+    direct_chat = tool_direct_chat_metadata(manifest)
     return {
         "name": str(manifest.get("name") or "").strip(),
         "aliases": tool_aliases(manifest),
@@ -126,6 +145,7 @@ def tool_chat_metadata(manifest: dict[str, object]) -> dict[str, Any]:
         "result_kind": infer_tool_result_kind(manifest),
         "help_supported": isinstance(manifest.get("help"), dict),
         "direct_preanalysis_supported": isinstance(manifest.get("routing"), dict),
+        "direct_chat": direct_chat,
     }
 
 

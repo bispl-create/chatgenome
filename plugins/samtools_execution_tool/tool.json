@@ -28,6 +28,13 @@
     "allow_cpu_fallback": true,
     "estimated_runtime_sec": 8
   },
+  "direct_chat": {
+    "source_type": "raw_qc",
+    "endpoint": "samtools",
+    "argument_mode": "key_value",
+    "requested_view": "rawqc",
+    "result_kind": "samtools_result"
+  },
   "help": {
     "summary": "Run curated samtools alignment-QC commands on the active BAM, SAM, or CRAM source.",
     "modes": [

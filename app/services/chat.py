@@ -38,6 +38,7 @@ from app.services.tool_runner import (
     manifest_for_alias,
     tool_aliases,
     tool_chat_metadata,
+    tool_direct_chat_metadata,
 )
 from app.services.workflows import (
     run_registered_analysis_workflow,
@@ -789,8 +790,45 @@ def _extract_key_value_options(text: str) -> dict[str, str]:
     return options
 
 
-def _handle_liftover_request(payload: AnalysisChatRequest, *, remainder: str = "") -> AnalysisChatResponse:
+def _parse_direct_tool_options(remainder: str, argument_mode: str) -> dict[str, str]:
+    mode = argument_mode.strip().lower()
+    if mode in {"", "none"}:
+        return {}
+    if mode == "key_value":
+        return _extract_key_value_options(remainder)
+    if mode == "region_or_key_value":
+        options = _extract_key_value_options(remainder)
+        if "region" not in options:
+            region = _extract_ldblockshow_region(remainder)
+            if region:
+                options["region"] = region
+        return options
+    if mode == "mode_or_key_value":
+        options = _extract_key_value_options(remainder)
+        stripped = remainder.strip().lower()
+        if "mode" not in options and stripped:
+            first_token = stripped.split()[0]
+            if re.fullmatch(r"[a-z0-9_-]+", first_token):
+                options["mode"] = first_token
+        return options
+    return {}
+
+
+def _tool_request_direct_chat_metadata(tool_request: dict[str, object]) -> dict[str, Any]:
+    manifest = tool_request.get("manifest")
+    if not isinstance(manifest, dict):
+        return {}
+    return tool_direct_chat_metadata(manifest)
+
+
+def _execute_analysis_direct_liftover(
+    payload: AnalysisChatRequest,
+    tool_request: dict[str, object],
+    direct_chat: dict[str, Any],
+    options: dict[str, str],
+) -> AnalysisChatResponse:
     source_vcf_path = payload.analysis.source_vcf_path
+    result_kind = str(direct_chat.get("result_kind") or "liftover_result")
     if not source_vcf_path:
         return _analysis_tool_response(
             "The current analysis context does not include a source VCF path, so liftover cannot be run from this chat turn.",
@@ -798,9 +836,8 @@ def _handle_liftover_request(payload: AnalysisChatRequest, *, remainder: str = "
             used_tools=["gatk_liftover_vcf_tool"],
         )
 
-    options = _extract_key_value_options(remainder)
     target_build, target_label = _extract_liftover_target_build(
-        options.get("target") or payload.question,
+        options.get("target") or str(tool_request.get("remainder") or payload.question),
         payload.analysis.facts.genome_build_guess,
     )
     source_build = options.get("source_build") or payload.analysis.facts.genome_build_guess
@@ -816,7 +853,7 @@ def _handle_liftover_request(payload: AnalysisChatRequest, *, remainder: str = "
                 f"- Reject VCF: `{existing.reject_path}`\n\n"
                 "The existing LiftOver Review card has been reused instead of rerunning the tool."
             ),
-            result_kind="liftover_result",
+            result_kind=result_kind,
             result=existing,
             used_tools=["gatk_liftover_vcf_tool"],
         )
@@ -843,80 +880,20 @@ def _handle_liftover_request(payload: AnalysisChatRequest, *, remainder: str = "
             f"- Reject VCF: `{result.reject_path}`\n\n"
             "The Studio card has been updated with the latest liftover result."
         ),
-        result_kind="liftover_result",
+        result_kind=result_kind,
         result=result,
         used_tools=["gatk_liftover_vcf_tool"],
+        requested_view=str(direct_chat.get("requested_view") or None) or None,
     )
 
 
-def _dispatch_analysis_liftover(payload: AnalysisChatRequest, tool_request: dict[str, object]) -> AnalysisChatResponse:
-    return _handle_liftover_request(payload, remainder=str(tool_request.get("remainder") or ""))
-
-
-def _dispatch_analysis_snpeff(payload: AnalysisChatRequest, tool_request: dict[str, object]) -> AnalysisChatResponse:
-    return _handle_snpeff_request(payload)
-
-
-def _dispatch_analysis_plink(payload: AnalysisChatRequest, tool_request: dict[str, object]) -> AnalysisChatResponse:
-    return _handle_plink_request(payload)
-
-
-def _dispatch_analysis_ldblockshow(payload: AnalysisChatRequest, tool_request: dict[str, object]) -> AnalysisChatResponse:
-    return _handle_ldblockshow_request(payload)
-
-
-ANALYSIS_TOOL_DISPATCH: dict[str, Any] = {
-    "gatk_liftover_vcf_tool": _dispatch_analysis_liftover,
-    "plink_execution_tool": _dispatch_analysis_plink,
-    "snpeff_execution_tool": _dispatch_analysis_snpeff,
-    "ldblockshow_execution_tool": _dispatch_analysis_ldblockshow,
-}
-
-
-def _handle_analysis_at_tool_request(payload: AnalysisChatRequest, tool_request: dict[str, object]) -> AnalysisChatResponse | None:
-    manifest = tool_request.get("manifest")
-    help_text = _resolve_tool_help_response(tool_request)
-    if help_text is not None:
-        return AnalysisChatResponse(answer=help_text, citations=[], used_fallback=False)
-    mismatch_text = _resolve_tool_source_mismatch_response(tool_request, "vcf")
-    if mismatch_text is not None:
-        return AnalysisChatResponse(answer=mismatch_text, citations=[], used_fallback=False)
-    if manifest is None:
-        return AnalysisChatResponse(
-            answer=_unknown_tool_answer(tool_request),
-            citations=[],
-            used_fallback=False,
-        )
-    dispatch = _dispatch_for_manifest(manifest, ANALYSIS_TOOL_DISPATCH)
-    if dispatch is not None:
-        return dispatch(payload, tool_request)
-    return None
-
-
-def _handle_analysis_skill_request(payload: AnalysisChatRequest, skill_request: dict[str, object]) -> AnalysisChatResponse:
-    manifest = skill_request.get("manifest")
-    help_text = _resolve_skill_help_response(skill_request, "vcf")
-    if help_text is not None:
-        return AnalysisChatResponse(answer=help_text, citations=[], used_fallback=False)
-    if manifest is None:
-        name = str(skill_request.get("name") or "workflow")
-        return AnalysisChatResponse(
-            answer=f"`@skill {name}` is not a registered workflow for the current build.",
-            citations=[],
-            used_fallback=False,
-        )
-    dispatch = _dispatch_for_manifest(manifest, ANALYSIS_WORKFLOW_DISPATCH)
-    if dispatch is not None:
-        return dispatch(payload, skill_request)
-    workflow_name = str(manifest.get("name") or "")
-    return AnalysisChatResponse(
-        answer=f"`@skill {workflow_name}` is registered but not yet executable in analysis chat.",
-        citations=[],
-        used_fallback=False,
-    )
-
-
-def _dispatch_raw_qc_samtools(payload: RawQcChatRequest, tool_request: dict[str, object]) -> RawQcChatResponse:
+def _execute_raw_qc_direct_samtools(
+    payload: RawQcChatRequest,
+    tool_request: dict[str, object],
+    direct_chat: dict[str, Any],
+    options: dict[str, str],
+) -> RawQcChatResponse:
+    del tool_request, options
     alignment_kind = (payload.analysis.facts.file_kind or "").upper()
     if alignment_kind not in {"BAM", "SAM", "CRAM", "ALIGNMENT"}:
         return _raw_qc_tool_response(
@@ -954,89 +931,26 @@ def _dispatch_raw_qc_samtools(payload: RawQcChatRequest, tool_request: dict[str,
     )
     if result.warnings:
         answer += "\n\nWarnings:\n" + "\n".join(f"- {warning}" for warning in result.warnings[:5])
-    return _raw_qc_tool_response(answer, result_kind="samtools_result", result=result)
-
-
-RAW_QC_TOOL_DISPATCH: dict[str, Any] = {
-    "samtools_execution_tool": _dispatch_raw_qc_samtools,
-}
-
-
-def _handle_raw_qc_at_tool_request(payload: RawQcChatRequest, tool_request: dict[str, object]) -> RawQcChatResponse:
-    manifest = tool_request.get("manifest")
-    help_text = _resolve_tool_help_response(tool_request)
-    if help_text is not None:
-        return RawQcChatResponse(answer=help_text, citations=[], used_fallback=False)
-    mismatch_text = _resolve_tool_source_mismatch_response(tool_request, "raw_qc")
-    if mismatch_text is not None:
-        return RawQcChatResponse(answer=mismatch_text, citations=[], used_fallback=False)
-    if manifest is None:
-        return RawQcChatResponse(
-            answer=_unknown_tool_answer(tool_request),
-            citations=[],
-            used_fallback=False,
-        )
-    dispatch = _dispatch_for_manifest(manifest, RAW_QC_TOOL_DISPATCH)
-    if dispatch is not None:
-        return dispatch(payload, tool_request)
-    return RawQcChatResponse(answer=_unknown_tool_answer(tool_request), citations=[], used_fallback=False)
-
-
-def _handle_raw_qc_skill_request(payload: RawQcChatRequest, skill_request: dict[str, object]) -> RawQcChatResponse:
-    manifest = skill_request.get("manifest")
-    help_text = _resolve_skill_help_response(skill_request, "raw_qc")
-    if help_text is not None:
-        return RawQcChatResponse(answer=help_text, citations=[], used_fallback=False)
-    if manifest is None:
-        name = str(skill_request.get("name") or "workflow")
-        return RawQcChatResponse(
-            answer=f"`@skill {name}` is not a registered workflow for the current build.",
-            citations=[],
-            used_fallback=False,
-        )
-    dispatch = _dispatch_for_manifest(manifest, RAW_QC_WORKFLOW_DISPATCH)
-    if dispatch is not None:
-        return dispatch(payload, skill_request)
-    workflow_name = str(manifest.get("name") or "")
-    return RawQcChatResponse(
-        answer=f"`@skill {workflow_name}` is registered but not yet executable in raw-QC chat.",
-        citations=[],
-        used_fallback=False,
+    return _raw_qc_tool_response(
+        answer,
+        result_kind=str(direct_chat.get("result_kind") or "samtools_result"),
+        result=result,
+        requested_view=str(direct_chat.get("requested_view") or None) or None,
     )
 
 
-def _handle_summary_stats_at_tool_request(
-    payload: SummaryStatsChatRequest, tool_request: dict[str, object]
+def _execute_summary_stats_direct_qqman(
+    payload: SummaryStatsChatRequest,
+    tool_request: dict[str, object],
+    direct_chat: dict[str, Any],
+    options: dict[str, str],
 ) -> SummaryStatsChatResponse:
-    manifest = tool_request.get("manifest")
-    help_text = _resolve_tool_help_response(tool_request)
-    if help_text is not None:
-        return SummaryStatsChatResponse(answer=help_text, citations=[], used_fallback=False)
-    mismatch_text = _resolve_tool_source_mismatch_response(tool_request, "summary_stats")
-    if mismatch_text is not None:
-        return SummaryStatsChatResponse(answer=mismatch_text, citations=[], used_fallback=False)
-    if manifest is None:
-        return SummaryStatsChatResponse(
-            answer=_unknown_tool_answer(tool_request),
-            citations=[],
-            used_fallback=False,
-        )
-    dispatch = _dispatch_for_manifest(manifest, SUMMARY_STATS_TOOL_DISPATCH)
-    if dispatch is not None:
-        return dispatch(payload, tool_request)
-    return SummaryStatsChatResponse(answer=_unknown_tool_answer(tool_request), citations=[], used_fallback=False)
-
-
-def _dispatch_summary_stats_qqman(
-    payload: SummaryStatsChatRequest, tool_request: dict[str, object]
-) -> SummaryStatsChatResponse:
-    remainder = str(tool_request.get("remainder") or "")
+    del tool_request
     source_stats_path = payload.analysis.source_stats_path
     if not source_stats_path:
         return _summary_stats_tool_response(
             "The active summary-statistics session does not expose a durable source file path, so `@qqman` cannot run yet."
         )
-    options = _extract_key_value_options(remainder)
     result = run_qqman_association(
         QqmanAssociationRequest(
             association_path=source_stats_path,
@@ -1051,101 +965,72 @@ def _dispatch_summary_stats_qqman(
             f"- Warnings: {len(result.warnings)}\n\n"
             "The Studio card has been updated with the latest qqman result."
         ),
-        result_kind="qqman_result",
+        result_kind=str(direct_chat.get("result_kind") or "qqman_result"),
         result=result,
-        requested_view="qqman",
+        requested_view=str(direct_chat.get("requested_view") or None) or None,
     )
 
 
-SUMMARY_STATS_TOOL_DISPATCH: dict[str, Any] = {
-    "qqman_execution_tool": _dispatch_summary_stats_qqman,
-}
-
-
-def _handle_snpeff_request(payload: AnalysisChatRequest) -> AnalysisChatResponse:
+def _execute_analysis_direct_snpeff(
+    payload: AnalysisChatRequest,
+    tool_request: dict[str, object],
+    direct_chat: dict[str, Any],
+    options: dict[str, str],
+) -> AnalysisChatResponse:
+    del tool_request
     source_vcf_path = payload.analysis.source_vcf_path
     if not source_vcf_path:
-        return AnalysisChatResponse(
-            answer="The current analysis context does not include a source VCF path, so SnpEff cannot be run from this chat turn.",
-            citations=[],
+        return _analysis_tool_response(
+            "The current analysis context does not include a source VCF path, so SnpEff cannot be run from this chat turn.",
             used_fallback=True,
             used_tools=["snpeff_execution_tool"],
         )
 
     existing = payload.analysis.snpeff_result
     if existing is not None:
-        return AnalysisChatResponse(
-            answer=(
+        return _analysis_tool_response(
+            (
                 f"SnpEff results are already available for the current VCF using genome `{existing.genome}`.\n\n"
                 f"- Output path: `{existing.output_path}`\n"
                 f"- Preview records: {len(existing.parsed_records)}\n\n"
                 "The existing SnpEff Review card has been reused instead of rerunning the tool."
             ),
-            citations=[],
-            used_fallback=False,
+            result_kind=str(direct_chat.get("result_kind") or "snpeff_result"),
+            result=existing,
             used_tools=["snpeff_execution_tool"],
+            requested_view=str(direct_chat.get("requested_view") or None) or None,
         )
 
     result = run_snpeff(
         SnpEffRequest(
             vcf_path=source_vcf_path,
-            genome=_snpeff_genome_from_build(payload.analysis.facts.genome_build_guess),
-            output_prefix=f"{payload.analysis.analysis_id}-snpeff",
+            genome=options.get("genome") or _snpeff_genome_from_build(payload.analysis.facts.genome_build_guess),
+            output_prefix=options.get("output_prefix") or f"{payload.analysis.analysis_id}-snpeff",
             parse_limit=10,
         )
     )
-    return AnalysisChatResponse(
-        answer=(
+    return _analysis_tool_response(
+        (
             f"SnpEff was run on the current VCF using genome `{result.genome}`.\n\n"
             f"- Output path: `{result.output_path}`\n"
             f"- Preview records: {len(result.parsed_records)}\n\n"
             "The SnpEff Review card has been updated with the latest result."
         ),
-        citations=[],
-        used_fallback=False,
+        result_kind=str(direct_chat.get("result_kind") or "snpeff_result"),
+        result=result,
         used_tools=["snpeff_execution_tool"],
+        requested_view=str(direct_chat.get("requested_view") or None) or None,
     )
 
 
-def _handle_plink_request(payload: AnalysisChatRequest) -> AnalysisChatResponse:
+def _execute_analysis_direct_ldblockshow(
+    payload: AnalysisChatRequest,
+    tool_request: dict[str, object],
+    direct_chat: dict[str, Any],
+    options: dict[str, str],
+) -> AnalysisChatResponse:
     source_vcf_path = payload.analysis.source_vcf_path
-    if not source_vcf_path:
-        return AnalysisChatResponse(
-            answer="The current analysis context does not include a source VCF path, so PLINK cannot be run from this chat turn.",
-            citations=[],
-            used_fallback=True,
-            used_tools=["plink_execution_tool"],
-            requested_view="plink",
-        )
-
-    existing = payload.analysis.plink_result
-    answer = (
-        "The PLINK card is ready in Studio.\n\n"
-        "- This ChatGenome build currently exposes PLINK as a deterministic QC workflow.\n"
-        "- You can choose the QC options, review the command preview, and run PLINK from the card.\n"
-        "- The result will appear in the same card after execution."
-    )
-    if existing is not None:
-        answer += (
-            f"\n\nAn existing PLINK result is already present for this analysis:\n"
-            f"- Output prefix: `{existing.output_prefix}`\n"
-            f"- Frequency rows: {len(existing.freq_rows)}\n"
-            f"- Missingness rows: {len(existing.missing_rows)}\n"
-            f"- Hardy rows: {len(existing.hardy_rows)}"
-        )
-    return AnalysisChatResponse(
-        answer=answer,
-        citations=[],
-        used_fallback=False,
-        used_tools=payload.analysis.used_tools or [],
-        requested_view="plink",
-        plink_result=existing,
-    )
-
-
-def _handle_ldblockshow_request(payload: AnalysisChatRequest) -> AnalysisChatResponse:
-    source_vcf_path = payload.analysis.source_vcf_path
-    region = _extract_ldblockshow_region(payload.question)
+    region = options.get("region") or _extract_ldblockshow_region(str(tool_request.get("remainder") or payload.question))
 
     if not source_vcf_path:
         return AnalysisChatResponse(
@@ -1196,14 +1081,266 @@ def _handle_ldblockshow_request(payload: AnalysisChatRequest) -> AnalysisChatRes
         f"- Warnings: {len(result.warnings)}\n\n"
         "The Studio card has been updated with the latest LD block result."
     )
-    return AnalysisChatResponse(
-        answer=answer,
-        citations=[],
-        used_fallback=False,
+    return _analysis_tool_response(
+        answer,
+        result_kind=str(direct_chat.get("result_kind") or "ldblockshow_result"),
+        result=result,
         used_tools=["ldblockshow_execution_tool"],
-        ldblockshow_result=result,
+        requested_view=str(direct_chat.get("requested_view") or None) or None,
     )
 
+
+def _execute_analysis_direct_plink(
+    payload: AnalysisChatRequest,
+    tool_request: dict[str, object],
+    direct_chat: dict[str, Any],
+    options: dict[str, str],
+) -> AnalysisChatResponse:
+    del tool_request
+    source_vcf_path = payload.analysis.source_vcf_path
+    if not source_vcf_path:
+        return AnalysisChatResponse(
+            answer="The current analysis context does not include a source VCF path, so PLINK cannot be run from this chat turn.",
+            citations=[],
+            used_fallback=True,
+            used_tools=["plink_execution_tool"],
+            requested_view=str(direct_chat.get("requested_view") or "plink"),
+        )
+
+    requested_mode = str(
+        options.get("mode")
+        or direct_chat.get("default_mode")
+        or "qc"
+    ).strip().lower()
+    if requested_mode not in {"qc", "score"}:
+        requested_mode = "qc"
+
+    existing = payload.analysis.plink_result
+    if requested_mode == "score":
+        answer = (
+            "The PLINK score card is ready in Studio.\n\n"
+            "- This mode uses the latest PRS prep score file.\n"
+            "- Run `@skill prs_prep` first on a summary-statistics source if the score file is not ready.\n"
+            "- You can review the score configuration and run PLINK from the Studio card."
+        )
+        if existing is not None and existing.mode == "score":
+            answer += (
+                f"\n\nAn existing PLINK score result is already present for this analysis:\n"
+                f"- Output prefix: `{existing.output_prefix}`\n"
+                f"- Scored samples: {existing.scored_sample_count if existing.scored_sample_count is not None else 'unknown'}\n"
+                f"- Score rows preview: {len(existing.score_rows)}"
+            )
+    else:
+        answer = (
+            "The PLINK card is ready in Studio.\n\n"
+            "- This ChatGenome build currently exposes PLINK as a deterministic QC workflow.\n"
+            "- You can choose the QC options, review the command preview, and run PLINK from the card.\n"
+            "- The result will appear in the same card after execution."
+        )
+        if existing is not None:
+            answer += (
+                f"\n\nAn existing PLINK result is already present for this analysis:\n"
+                f"- Output prefix: `{existing.output_prefix}`\n"
+                f"- Frequency rows: {len(existing.freq_rows)}\n"
+                f"- Missingness rows: {len(existing.missing_rows)}\n"
+                f"- Hardy rows: {len(existing.hardy_rows)}"
+            )
+    return _analysis_tool_response(
+        answer,
+        result_kind=str(direct_chat.get("result_kind") or "plink_result"),
+        result=existing,
+        used_tools=payload.analysis.used_tools or [],
+        requested_view=str(direct_chat.get("requested_view") or None) or None,
+    )
+
+
+ANALYSIS_DIRECT_TOOL_ENDPOINTS: dict[str, Any] = {
+    "liftover": _execute_analysis_direct_liftover,
+    "snpeff": _execute_analysis_direct_snpeff,
+    "ldblockshow": _execute_analysis_direct_ldblockshow,
+    "plink": _execute_analysis_direct_plink,
+}
+
+
+RAW_QC_DIRECT_TOOL_ENDPOINTS: dict[str, Any] = {
+    "samtools": _execute_raw_qc_direct_samtools,
+}
+
+
+SUMMARY_STATS_DIRECT_TOOL_ENDPOINTS: dict[str, Any] = {
+    "qqman": _execute_summary_stats_direct_qqman,
+}
+
+
+def _run_analysis_direct_tool(
+    payload: AnalysisChatRequest, tool_request: dict[str, object]
+) -> AnalysisChatResponse | None:
+    direct_chat = _tool_request_direct_chat_metadata(tool_request)
+    endpoint = str(direct_chat.get("endpoint") or "").strip().lower()
+    executor = ANALYSIS_DIRECT_TOOL_ENDPOINTS.get(endpoint)
+    if executor is None:
+        return None
+    options = _parse_direct_tool_options(
+        str(tool_request.get("remainder") or ""),
+        str(direct_chat.get("argument_mode") or ""),
+    )
+    return executor(payload, tool_request, direct_chat, options)
+
+
+def _run_raw_qc_direct_tool(
+    payload: RawQcChatRequest, tool_request: dict[str, object]
+) -> RawQcChatResponse | None:
+    direct_chat = _tool_request_direct_chat_metadata(tool_request)
+    endpoint = str(direct_chat.get("endpoint") or "").strip().lower()
+    executor = RAW_QC_DIRECT_TOOL_ENDPOINTS.get(endpoint)
+    if executor is None:
+        return None
+    options = _parse_direct_tool_options(
+        str(tool_request.get("remainder") or ""),
+        str(direct_chat.get("argument_mode") or ""),
+    )
+    return executor(payload, tool_request, direct_chat, options)
+
+
+def _run_summary_stats_direct_tool(
+    payload: SummaryStatsChatRequest, tool_request: dict[str, object]
+) -> SummaryStatsChatResponse | None:
+    direct_chat = _tool_request_direct_chat_metadata(tool_request)
+    endpoint = str(direct_chat.get("endpoint") or "").strip().lower()
+    executor = SUMMARY_STATS_DIRECT_TOOL_ENDPOINTS.get(endpoint)
+    if executor is None:
+        return None
+    options = _parse_direct_tool_options(
+        str(tool_request.get("remainder") or ""),
+        str(direct_chat.get("argument_mode") or ""),
+    )
+    return executor(payload, tool_request, direct_chat, options)
+
+
+ANALYSIS_TOOL_DISPATCH: dict[str, Any] = {}
+
+
+def _handle_analysis_at_tool_request(payload: AnalysisChatRequest, tool_request: dict[str, object]) -> AnalysisChatResponse | None:
+    manifest = tool_request.get("manifest")
+    help_text = _resolve_tool_help_response(tool_request)
+    if help_text is not None:
+        return AnalysisChatResponse(answer=help_text, citations=[], used_fallback=False)
+    mismatch_text = _resolve_tool_source_mismatch_response(tool_request, "vcf")
+    if mismatch_text is not None:
+        return AnalysisChatResponse(answer=mismatch_text, citations=[], used_fallback=False)
+    if manifest is None:
+        return AnalysisChatResponse(
+            answer=_unknown_tool_answer(tool_request),
+            citations=[],
+            used_fallback=False,
+        )
+    direct_response = _run_analysis_direct_tool(payload, tool_request)
+    if direct_response is not None:
+        return direct_response
+    dispatch = _dispatch_for_manifest(manifest, ANALYSIS_TOOL_DISPATCH)
+    if dispatch is not None:
+        return dispatch(payload, tool_request)
+    return None
+
+
+def _handle_analysis_skill_request(payload: AnalysisChatRequest, skill_request: dict[str, object]) -> AnalysisChatResponse:
+    manifest = skill_request.get("manifest")
+    help_text = _resolve_skill_help_response(skill_request, "vcf")
+    if help_text is not None:
+        return AnalysisChatResponse(answer=help_text, citations=[], used_fallback=False)
+    if manifest is None:
+        name = str(skill_request.get("name") or "workflow")
+        return AnalysisChatResponse(
+            answer=f"`@skill {name}` is not a registered workflow for the current build.",
+            citations=[],
+            used_fallback=False,
+        )
+    dispatch = _dispatch_for_manifest(manifest, ANALYSIS_WORKFLOW_DISPATCH)
+    if dispatch is not None:
+        return dispatch(payload, skill_request)
+    workflow_name = str(manifest.get("name") or "")
+    return AnalysisChatResponse(
+        answer=f"`@skill {workflow_name}` is registered but not yet executable in analysis chat.",
+        citations=[],
+        used_fallback=False,
+    )
+
+
+RAW_QC_TOOL_DISPATCH: dict[str, Any] = {}
+
+
+def _handle_raw_qc_at_tool_request(payload: RawQcChatRequest, tool_request: dict[str, object]) -> RawQcChatResponse:
+    manifest = tool_request.get("manifest")
+    help_text = _resolve_tool_help_response(tool_request)
+    if help_text is not None:
+        return RawQcChatResponse(answer=help_text, citations=[], used_fallback=False)
+    mismatch_text = _resolve_tool_source_mismatch_response(tool_request, "raw_qc")
+    if mismatch_text is not None:
+        return RawQcChatResponse(answer=mismatch_text, citations=[], used_fallback=False)
+    if manifest is None:
+        return RawQcChatResponse(
+            answer=_unknown_tool_answer(tool_request),
+            citations=[],
+            used_fallback=False,
+        )
+    direct_response = _run_raw_qc_direct_tool(payload, tool_request)
+    if direct_response is not None:
+        return direct_response
+    dispatch = _dispatch_for_manifest(manifest, RAW_QC_TOOL_DISPATCH)
+    if dispatch is not None:
+        return dispatch(payload, tool_request)
+    return RawQcChatResponse(answer=_unknown_tool_answer(tool_request), citations=[], used_fallback=False)
+
+
+def _handle_raw_qc_skill_request(payload: RawQcChatRequest, skill_request: dict[str, object]) -> RawQcChatResponse:
+    manifest = skill_request.get("manifest")
+    help_text = _resolve_skill_help_response(skill_request, "raw_qc")
+    if help_text is not None:
+        return RawQcChatResponse(answer=help_text, citations=[], used_fallback=False)
+    if manifest is None:
+        name = str(skill_request.get("name") or "workflow")
+        return RawQcChatResponse(
+            answer=f"`@skill {name}` is not a registered workflow for the current build.",
+            citations=[],
+            used_fallback=False,
+        )
+    dispatch = _dispatch_for_manifest(manifest, RAW_QC_WORKFLOW_DISPATCH)
+    if dispatch is not None:
+        return dispatch(payload, skill_request)
+    workflow_name = str(manifest.get("name") or "")
+    return RawQcChatResponse(
+        answer=f"`@skill {workflow_name}` is registered but not yet executable in raw-QC chat.",
+        citations=[],
+        used_fallback=False,
+    )
+
+
+def _handle_summary_stats_at_tool_request(
+    payload: SummaryStatsChatRequest, tool_request: dict[str, object]
+) -> SummaryStatsChatResponse:
+    manifest = tool_request.get("manifest")
+    help_text = _resolve_tool_help_response(tool_request)
+    if help_text is not None:
+        return SummaryStatsChatResponse(answer=help_text, citations=[], used_fallback=False)
+    mismatch_text = _resolve_tool_source_mismatch_response(tool_request, "summary_stats")
+    if mismatch_text is not None:
+        return SummaryStatsChatResponse(answer=mismatch_text, citations=[], used_fallback=False)
+    if manifest is None:
+        return SummaryStatsChatResponse(
+            answer=_unknown_tool_answer(tool_request),
+            citations=[],
+            used_fallback=False,
+        )
+    direct_response = _run_summary_stats_direct_tool(payload, tool_request)
+    if direct_response is not None:
+        return direct_response
+    dispatch = _dispatch_for_manifest(manifest, SUMMARY_STATS_TOOL_DISPATCH)
+    if dispatch is not None:
+        return dispatch(payload, tool_request)
+    return SummaryStatsChatResponse(answer=_unknown_tool_answer(tool_request), citations=[], used_fallback=False)
+
+
+SUMMARY_STATS_TOOL_DISPATCH: dict[str, Any] = {}
 
 def answer_analysis_chat(payload: AnalysisChatRequest) -> AnalysisChatResponse:
     if _needs_grounded_clarification(payload.question):
