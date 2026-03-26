@@ -4,8 +4,6 @@ import json
 import os
 import re
 import urllib.request
-from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 from app.models import (
@@ -35,6 +33,12 @@ from app.services.plink import run_plink
 from app.services.r_vcf_plots import run_qqman_association
 from app.services.samtools import run_samtools
 from app.services.snpeff import run_snpeff
+from app.services.tool_runner import (
+    load_tool_manifests,
+    manifest_for_alias,
+    tool_aliases,
+    tool_chat_metadata,
+)
 from app.services.workflows import (
     run_registered_analysis_workflow,
     list_workflow_manifests,
@@ -43,121 +47,7 @@ from app.services.workflows import (
     run_registered_summary_stats_workflow,
 )
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-PLUGINS_DIR = ROOT_DIR / "plugins"
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "45"))
-
-TOOL_ALIAS_REGISTRY: dict[str, dict[str, Any]] = {
-    "liftover": {
-        "plugin_name": "gatk_liftover_vcf_tool",
-        "aliases": ["liftover"],
-        "source_types": ["vcf"],
-        "result_kind": "liftover_result",
-        "help_supported": True,
-        "direct_preanalysis_supported": True,
-    },
-    "samtools": {
-        "plugin_name": "samtools_execution_tool",
-        "aliases": ["samtools"],
-        "source_types": ["raw_qc"],
-        "result_kind": "samtools_result",
-        "help_supported": True,
-        "direct_preanalysis_supported": True,
-    },
-    "plink": {
-        "plugin_name": "plink_execution_tool",
-        "aliases": ["plink"],
-        "source_types": ["vcf"],
-        "result_kind": "plink_result",
-        "help_supported": True,
-        "direct_preanalysis_supported": True,
-    },
-    "snpeff": {
-        "plugin_name": "snpeff_execution_tool",
-        "aliases": ["snpeff"],
-        "source_types": ["vcf"],
-        "result_kind": "snpeff_result",
-        "help_supported": True,
-        "direct_preanalysis_supported": True,
-    },
-    "ldblockshow": {
-        "plugin_name": "ldblockshow_execution_tool",
-        "aliases": ["ldblockshow"],
-        "source_types": ["vcf"],
-        "result_kind": "ldblockshow_result",
-        "help_supported": True,
-        "direct_preanalysis_supported": True,
-    },
-    "qqman": {
-        "plugin_name": "qqman_execution_tool",
-        "aliases": ["qqman"],
-        "source_types": ["summary_stats"],
-        "result_kind": "qqman_result",
-        "help_supported": True,
-        "direct_preanalysis_supported": True,
-    },
-}
-
-
-@lru_cache(maxsize=1)
-def _load_tool_manifests() -> list[dict[str, object]]:
-    manifests: list[dict[str, object]] = []
-    for manifest in sorted(PLUGINS_DIR.glob("*/tool.json")):
-        try:
-            payload = json.loads(manifest.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if isinstance(payload, dict):
-            manifests.append(payload)
-    return manifests
-
-
-def _tool_registry_entry_for_manifest(manifest: dict[str, object]) -> dict[str, Any] | None:
-    plugin_name = str(manifest.get("name") or "").strip()
-    for entry in TOOL_ALIAS_REGISTRY.values():
-        if str(entry.get("plugin_name") or "").strip() == plugin_name:
-            return entry
-    return None
-
-
-def _tool_registry_entry_for_alias(alias: str) -> tuple[str | None, dict[str, Any] | None]:
-    lowered = alias.strip().lower()
-    for canonical_alias, entry in TOOL_ALIAS_REGISTRY.items():
-        aliases = [str(item).strip().lower() for item in entry.get("aliases", [])]
-        if lowered in aliases:
-            return canonical_alias, entry
-    return None, None
-
-
-def _manifest_for_plugin_name(plugin_name: str | None) -> dict[str, object] | None:
-    if not plugin_name:
-        return None
-    normalized = str(plugin_name).strip()
-    for manifest in _load_tool_manifests():
-        if str(manifest.get("name") or "").strip() == normalized:
-            return manifest
-    return None
-
-
-def _tool_aliases(manifest: dict[str, object]) -> list[str]:
-    aliases: set[str] = set()
-    name = str(manifest.get("name") or "").strip().lower()
-    if name:
-        aliases.add(name)
-        simplified = re.sub(r"^(gatk_|bcftools_)", "", name)
-        simplified = re.sub(r"_(execution|vcf|tool)$", "", simplified)
-        simplified = re.sub(r"_+", "_", simplified).strip("_")
-        if simplified:
-            aliases.add(simplified)
-            aliases.add(simplified.replace("_", ""))
-            aliases.add(simplified.replace("_", "-"))
-    routing = manifest.get("routing")
-    if isinstance(routing, dict):
-        for keyword in routing.get("trigger_keywords", []):
-            text = str(keyword).strip().lower()
-            if text and re.fullmatch(r"[a-z0-9_-]+", text):
-                aliases.add(text)
-    return sorted(aliases)
 
 
 def _parse_at_tool_request(question: str) -> dict[str, object] | None:
@@ -170,9 +60,11 @@ def _parse_at_tool_request(question: str) -> dict[str, object] | None:
         return None
     remainder = (match.group(2) or "").strip()
     lowered = remainder.lower()
-    canonical_alias, registry_entry = _tool_registry_entry_for_alias(raw_alias)
-    if registry_entry is not None:
-        manifest = _manifest_for_plugin_name(registry_entry.get("plugin_name"))
+    manifest = manifest_for_alias(raw_alias)
+    if manifest is not None:
+        registry_entry = tool_chat_metadata(manifest)
+        aliases = [str(item).strip().lower() for item in registry_entry.get("aliases", []) if str(item).strip()]
+        canonical_alias = aliases[0] if aliases else raw_alias
         return {
             "manifest": manifest,
             "alias": canonical_alias or raw_alias,
@@ -181,17 +73,6 @@ def _parse_at_tool_request(question: str) -> dict[str, object] | None:
             "remainder": remainder,
             "is_help": lowered in {"help", "--help", "-h"} or lowered.startswith("help "),
         }
-
-    for manifest in _load_tool_manifests():
-        if raw_alias in _tool_aliases(manifest):
-            return {
-                "manifest": manifest,
-                "alias": raw_alias,
-                "input_alias": raw_alias,
-                "registry_entry": _tool_registry_entry_for_manifest(manifest),
-                "remainder": remainder,
-                "is_help": lowered in {"help", "--help", "-h"} or lowered.startswith("help "),
-            }
     return {
         "manifest": None,
         "alias": raw_alias,
@@ -232,10 +113,10 @@ def _parse_skill_request(question: str) -> dict[str, object] | None:
 
 def _render_tool_help(manifest: dict[str, object]) -> str:
     name = str(manifest.get("name") or "tool")
-    registry_entry = _tool_registry_entry_for_manifest(manifest)
+    registry_entry = tool_chat_metadata(manifest)
     help_block = manifest.get("help")
     if not isinstance(help_block, dict):
-        aliases = ", ".join(f"@{item}" for item in _tool_aliases(manifest)[:4])
+        aliases = ", ".join(f"@{item}" for item in tool_aliases(manifest)[:4])
         return (
             f"`{name}` is registered, but no curated help metadata is available yet.\n\n"
             f"- Try one of these aliases: {aliases or '@tool'}"
@@ -264,7 +145,7 @@ def _render_tool_help(manifest: dict[str, object]) -> str:
     alias_candidates = (
         [str(item).strip() for item in registry_entry.get("aliases", []) if str(item).strip()]
         if registry_entry
-        else _tool_aliases(manifest)[:4]
+        else tool_aliases(manifest)[:4]
     )
     alias_list = [f"@{item}" for item in alias_candidates[:4]]
     primary_alias = alias_list[0] if alias_list else "@tool"
@@ -366,7 +247,7 @@ def _resolve_tool_source_mismatch_response(
     if not isinstance(registry_entry, dict):
         manifest = tool_request.get("manifest")
         if isinstance(manifest, dict):
-            registry_entry = _tool_registry_entry_for_manifest(manifest)
+            registry_entry = tool_chat_metadata(manifest)
     allowed_source_types = [
         str(item).strip().lower()
         for item in (registry_entry.get("source_types", []) if isinstance(registry_entry, dict) else [])
@@ -558,7 +439,7 @@ def _render_skill_help(source_type: str | None = None, selected: dict[str, objec
         return "No workflow registry entries are available for the current source."
     tool_lookup = {
         str(item.get("name") or "").strip(): item
-        for item in _load_tool_manifests()
+        for item in load_tool_manifests()
         if isinstance(item, dict)
     }
     lines: list[str] = ["**Workflow registry**", ""]
