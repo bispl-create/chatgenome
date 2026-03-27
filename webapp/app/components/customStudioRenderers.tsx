@@ -45,6 +45,13 @@ function CohortBrowserCard({
       )
     : [];
   const previewColumns = Array.isArray(artifact?.grid?.columns) ? artifact.grid.columns : [];
+  const schemaHighlights = Array.isArray(artifact?.schema_highlights) ? artifact.schema_highlights : [];
+  const missingnessRows = Array.isArray(artifact?.missingness?.top_missing_columns)
+    ? artifact.missingness.top_missing_columns
+    : Array.isArray(artifact?.missingness)
+      ? artifact.missingness
+      : [];
+  const subjectRows = Array.isArray(artifact?.subjects) ? artifact.subjects : [];
   const overviewItems = [
     { label: "Workbook", value: analysis?.file_name ?? "n/a", tone: "neutral" as const },
     { label: "Sheets", value: formatNumber(analysis?.sheet_count), tone: "good" as const },
@@ -92,7 +99,7 @@ function CohortBrowserCard({
               <article className="miniCard">
                 <h3>Schema highlights</h3>
                 <StudioSimpleList
-                  items={(artifact.schema_highlights ?? []).map((item: any) => ({
+                  items={schemaHighlights.map((item: any) => ({
                     label: item.column ?? "column",
                     detail: `${item.type ?? "unknown"}${item.role ? ` | ${item.role}` : ""}`,
                   }))}
@@ -104,9 +111,9 @@ function CohortBrowserCard({
               <article className="miniCard">
                 <h3>Missingness</h3>
                 <StudioSimpleList
-                  items={(artifact.missingness ?? []).map((item: any) => ({
+                  items={missingnessRows.map((item: any) => ({
                     label: item.column ?? "column",
-                    detail: `${formatNumber(item.missing)} missing (${item.percent ?? "0%"})`,
+                    detail: `${formatNumber(item.missing_count ?? item.missing)} missing (${typeof item.missing_rate === "number" ? `${(item.missing_rate * 100).toFixed(1)}%` : item.percent ?? "0%"})`,
                   }))}
                   emptyLabel="No missingness summary available."
                 />
@@ -114,7 +121,7 @@ function CohortBrowserCard({
               <article className="miniCard">
                 <h3>Subject preview</h3>
                 <StudioSimpleList
-                  items={(artifact.subjects ?? []).map((item: any) => ({
+                  items={subjectRows.map((item: any) => ({
                     label: String(item.subject_id ?? item.row ?? "row"),
                     detail:
                       Array.isArray(item.summary) && item.summary.length

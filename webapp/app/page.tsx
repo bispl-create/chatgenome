@@ -1652,6 +1652,17 @@ export default function Page() {
     setAttachedFile(file);
     setAttachedSourceType(guessedSourceType);
     setActiveSource(null);
+    setStatus(
+      guessedSourceType === "spreadsheet"
+        ? "Uploading spreadsheet source..."
+        : guessedSourceType === "text"
+          ? "Uploading text source..."
+          : guessedSourceType === "summary_stats"
+            ? "Uploading summary statistics source..."
+            : guessedSourceType === "raw_qc"
+              ? "Uploading raw sequencing source..."
+              : "Uploading VCF source...",
+    );
     if (sessionMode === "prs" && slotRole === "prs_summary") {
       setSummaryStatsAnalysis(null);
       setDirectQqmanResult(null);
@@ -3125,6 +3136,21 @@ export default function Page() {
     if (status === "Text review ready") {
       return "The uploaded text note has been summarized into a preview-oriented Studio review card.";
     }
+    if (status === "Uploading spreadsheet source...") {
+      return "The workbook is being uploaded and prepared for sheet-level cohort review.";
+    }
+    if (status === "Uploading text source...") {
+      return "The text source is being uploaded for note review.";
+    }
+    if (status === "Uploading summary statistics source...") {
+      return "The summary statistics source is being uploaded and prepared for intake.";
+    }
+    if (status === "Uploading raw sequencing source...") {
+      return "The sequencing file is being uploaded for QC intake.";
+    }
+    if (status === "Uploading VCF source...") {
+      return "The VCF source is being uploaded and prepared for analysis.";
+    }
     if (status === "Spreadsheet source ready") {
       return "A workbook source is attached. Run the spreadsheet review workflow to build cohort-style Studio cards.";
     }
@@ -3221,6 +3247,11 @@ export default function Page() {
     status === "Generating answer..." ||
     status === "Preparing analysis..." ||
     status === "Analyzing" ||
+    status === "Uploading spreadsheet source..." ||
+    status === "Uploading text source..." ||
+    status === "Uploading summary statistics source..." ||
+    status === "Uploading raw sequencing source..." ||
+    status === "Uploading VCF source..." ||
     status === "Running FastQC..." ||
     status === "Loading summary statistics..." ||
     status === "Running Liftover..." ||
