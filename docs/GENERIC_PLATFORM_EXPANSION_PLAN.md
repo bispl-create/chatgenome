@@ -228,6 +228,26 @@ The generic step runner should:
 
 - Adding an already-supported tool to a workflow does not require editing `workflows.py`.
 
+### Current Status
+
+Partially completed on branch `codex/generic_tool`:
+
+- VCF step execution now prefers `tool.json.workflow_binding`
+- `workflow_binding` supports optional:
+  - `preprocess`
+  - `postprocess`
+- the remaining representative-VCF custom steps were moved closer to metadata-first execution:
+  - `snpeff_execution_tool`
+  - `cadd_lookup_tool`
+  - `revel_lookup_tool`
+  - `grounded_summary_tool`
+
+Remaining work for later stages:
+
+- reduce or remove summary-stats and raw-QC pseudo-tool step registries
+- split transform, fallback, and hook code out of `workflows.py`
+- remove the remaining legacy VCF workflow path
+
 ## Stage 5. Split Transform, Fallback, and Hook Registries
 
 ### Objective

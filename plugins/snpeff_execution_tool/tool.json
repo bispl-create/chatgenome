@@ -35,6 +35,16 @@
     "requested_view": "snpeff",
     "result_kind": "snpeff_result"
   },
+  "workflow_binding": {
+    "source_type": "vcf",
+    "input_map": {
+      "vcf_path": "$source_vcf_path",
+      "genome_build_guess": "$facts.genome_build_guess"
+    },
+    "preprocess": "vcf_prepare_snpeff_payload",
+    "transform": "snpeff_response",
+    "used_tools_label": "snpeff_execution_tool"
+  },
   "help": {
     "summary": "Run local SnpEff effect annotation on the active VCF source and preview annotated ANN records.",
     "modes": [

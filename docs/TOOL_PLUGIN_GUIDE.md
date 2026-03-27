@@ -63,7 +63,9 @@ Example:
     "result_path": "annotations",
     "transform": "variant_annotation_list",
     "used_tools_label": "annotation_tool",
-    "fallback_transform": "annotation_local"
+    "fallback_transform": "annotation_local",
+    "preprocess": "optional_hook_name",
+    "postprocess": "optional_hook_name"
   }
 }
 ```
@@ -73,6 +75,8 @@ Meaning:
 - `result_path`: top-level field to read from tool output
 - `transform`: normalize tool output into workflow context models
 - `fallback_transform`: optional local fallback when tool execution fails
+- `preprocess`: optional reusable payload-preparation hook
+- `postprocess`: optional reusable bind/merge hook after tool execution
 
 ## Required Runtime Contract
 

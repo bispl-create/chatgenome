@@ -16,6 +16,7 @@ from app.models import (
     RawQcResponse,
     RankedCandidate,
     RohSegment,
+    SnpEffResponse,
     SummaryStatsResponse,
     SymbolicAltSummary,
     ToolInfo,
@@ -217,6 +218,52 @@ def _extract_tool_result_value(result: dict[str, Any], binding: dict[str, Any]) 
     return result.get(result_path)
 
 
+def _apply_vcf_preprocess_hook(hook_name: str, context: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = hook_name.strip().lower()
+    if normalized == "vcf_prepare_snpeff_payload":
+        prepared = dict(payload)
+        genome_build_guess = str(prepared.pop("genome_build_guess", "") or "")
+        prepared["genome"] = snpeff_genome_from_build(genome_build_guess)
+        prepared["output_prefix"] = f"{Path(str(context['source_vcf_path'])).stem}.aux"
+        prepared["parse_limit"] = 10
+        return prepared
+    if normalized == "vcf_shortlist_annotations":
+        prepared = dict(payload)
+        prepared["annotations"] = [item.model_dump() for item in _vcf_context_shortlisted_annotations(context)]
+        return prepared
+    if normalized == "vcf_prepare_grounded_summary_inputs":
+        facts: AnalysisFacts = context["facts"]
+        annotations = list(context["annotations"])
+        references = build_reference_bundle(facts, annotations[: min(len(annotations), 20)])
+        recommendations = build_recommendations(facts)
+        ui_cards = build_ui_cards(facts, annotations)
+        context["references"] = references
+        context["recommendations"] = recommendations
+        context["ui_cards"] = ui_cards
+
+        prepared = dict(payload)
+        prepared["references"] = [item.model_dump() for item in references]
+        prepared["recommendations"] = [item.model_dump() for item in recommendations]
+        return prepared
+    raise NotImplementedError(f"Unsupported VCF workflow preprocess hook: {hook_name}")
+
+
+def _apply_vcf_postprocess_hook(
+    hook_name: str,
+    context: dict[str, Any],
+    result: dict[str, Any],
+    transformed_value: Any,
+) -> tuple[Any, bool]:
+    normalized = hook_name.strip().lower()
+    if normalized == "vcf_merge_lookup_annotations":
+        annotations = list(context["annotations"])
+        enriched_annotations = list(transformed_value or [])
+        enriched_by_key = {annotation_key(item): item for item in enriched_annotations}
+        merged_annotations = [enriched_by_key.get(annotation_key(item), item) for item in annotations]
+        return merged_annotations, bool(result.get("lookup_performed"))
+    raise NotImplementedError(f"Unsupported VCF workflow postprocess hook: {hook_name}")
+
+
 def _transform_bound_value(transform: str, value: Any) -> Any:
     normalized = transform.strip().lower()
     if normalized in {"", "identity"}:
@@ -235,6 +282,8 @@ def _transform_bound_value(transform: str, value: Any) -> Any:
         return [DetailedCountSummaryItem(**item) for item in list(value or [])]
     if normalized == "symbolic_alt_summary":
         return SymbolicAltSummary(**dict(value or {}))
+    if normalized == "snpeff_response":
+        return SnpEffResponse(**dict(value or {}))
     raise NotImplementedError(f"Unsupported workflow binding transform: {transform}")
 
 
@@ -343,6 +392,21 @@ def _compute_vcf_fallback_value(transform: str, context: dict[str, Any]) -> Any:
                 for item in symbolic_items[:5]
             ],
         )
+    if normalized == "grounded_summary_local":
+        facts: AnalysisFacts = context["facts"]
+        annotations = list(context["annotations"])
+        references = build_reference_bundle(facts, annotations[: min(len(annotations), 20)])
+        recommendations = build_recommendations(facts)
+        ui_cards = build_ui_cards(facts, annotations)
+        context["references"] = references
+        context["recommendations"] = recommendations
+        context["ui_cards"] = ui_cards
+        return build_draft_answer(
+            facts,
+            annotations,
+            [item.id for item in references],
+            [item.id for item in recommendations],
+        )
     raise NotImplementedError(f"Unsupported VCF fallback transform: {transform}")
 
 
@@ -351,11 +415,24 @@ def _execute_generic_vcf_bound_tool(tool_name: str, context: dict[str, Any], bin
     if binding is None:
         raise NotImplementedError(f"No generic VCF workflow binding is registered for {tool_name}.")
     payload = _build_tool_payload_from_binding(binding, context)
+    preprocess_hook = str(binding.get("preprocess") or "").strip()
+    if preprocess_hook:
+        payload = _apply_vcf_preprocess_hook(preprocess_hook, context, payload)
     result = run_tool(tool_name, payload)
     value = _extract_tool_result_value(result, binding)
-    context[bind_name] = _transform_bound_value(str(binding.get("transform") or "identity"), value)
+    transformed_value = _transform_bound_value(str(binding.get("transform") or "identity"), value)
+    append_used_tool = True
+    postprocess_hook = str(binding.get("postprocess") or "").strip()
+    if postprocess_hook:
+        transformed_value, append_used_tool = _apply_vcf_postprocess_hook(
+            postprocess_hook,
+            context,
+            result,
+            transformed_value,
+        )
+    context[bind_name] = transformed_value
     used_tools_label = str(binding.get("used_tools_label") or tool_name).strip()
-    if used_tools_label:
+    if append_used_tool and used_tools_label:
         context["used_tools"].append(used_tools_label)
 
 
@@ -451,24 +528,6 @@ def _fallback_annotation_step(context: dict[str, Any], bind_name: str) -> None:
     )
 
 
-def _execute_snpeff_step(context: dict[str, Any], bind_name: str) -> None:
-    from app.models import SnpEffResponse
-
-    path = str(context["source_vcf_path"])
-    facts: AnalysisFacts = context["facts"]
-    snpeff_payload = run_tool(
-        "snpeff_execution_tool",
-        {
-            "vcf_path": path,
-            "genome": snpeff_genome_from_build(facts.genome_build_guess),
-            "output_prefix": f"{Path(path).stem}.aux",
-            "parse_limit": 10,
-        },
-    )
-    context[bind_name] = SnpEffResponse(**snpeff_payload)
-    context["used_tools"].append("snpeff_execution_tool")
-
-
 def _execute_roh_step(context: dict[str, Any], bind_name: str) -> None:
     path = str(context["source_vcf_path"])
     roh_result = run_tool("roh_analysis_tool", {"vcf_path": path})
@@ -479,42 +538,6 @@ def _execute_roh_step(context: dict[str, Any], bind_name: str) -> None:
 def _fallback_roh_step(context: dict[str, Any], bind_name: str) -> None:
     path = str(context["source_vcf_path"])
     context[bind_name] = run_roh_analysis(path)
-
-
-def _execute_cadd_step(context: dict[str, Any], bind_name: str) -> None:
-    facts: AnalysisFacts = context["facts"]
-    annotations = list(context["annotations"])
-    shortlisted_annotations = _vcf_context_shortlisted_annotations(context)
-    cadd_result = run_tool(
-        "cadd_lookup_tool",
-        {
-            "annotations": [item.model_dump() for item in shortlisted_annotations],
-            "genome_build_guess": facts.genome_build_guess,
-        },
-    )
-    enriched_shortlisted_annotations = [VariantAnnotation(**item) for item in cadd_result["annotations"]]
-    if bool(cadd_result.get("lookup_performed")):
-        context["used_tools"].append("cadd_lookup_tool")
-    enriched_by_key = {annotation_key(item): item for item in enriched_shortlisted_annotations}
-    context[bind_name] = [enriched_by_key.get(annotation_key(item), item) for item in annotations]
-
-
-def _execute_revel_step(context: dict[str, Any], bind_name: str) -> None:
-    facts: AnalysisFacts = context["facts"]
-    annotations = list(context["annotations"])
-    shortlisted_annotations = _vcf_context_shortlisted_annotations(context)
-    revel_result = run_tool(
-        "revel_lookup_tool",
-        {
-            "annotations": [item.model_dump() for item in shortlisted_annotations],
-            "genome_build_guess": facts.genome_build_guess,
-        },
-    )
-    revel_enriched_annotations = [VariantAnnotation(**item) for item in revel_result["annotations"]]
-    if bool(revel_result.get("lookup_performed")):
-        context["used_tools"].append("revel_lookup_tool")
-    revel_by_key = {annotation_key(item): item for item in revel_enriched_annotations}
-    context[bind_name] = [revel_by_key.get(annotation_key(item), item) for item in annotations]
 
 
 def _execute_candidate_ranking_step(context: dict[str, Any], bind_name: str) -> None:
@@ -678,51 +701,7 @@ def _fallback_symbolic_alt_step(context: dict[str, Any], bind_name: str) -> None
     )
 
 
-def _execute_grounded_summary_step(context: dict[str, Any], bind_name: str) -> None:
-    facts: AnalysisFacts = context["facts"]
-    annotations = list(context["annotations"])
-    references = build_reference_bundle(facts, annotations[: min(len(annotations), 20)])
-    recommendations = build_recommendations(facts)
-    ui_cards = build_ui_cards(facts, annotations)
-    context["references"] = references
-    context["recommendations"] = recommendations
-    context["ui_cards"] = ui_cards
-    summary_result = run_tool(
-        "grounded_summary_tool",
-        {
-            "facts": facts.model_dump(),
-            "annotations": [item.model_dump() for item in annotations],
-            "references": [item.model_dump() for item in references],
-            "recommendations": [item.model_dump() for item in recommendations],
-        },
-    )
-    context[bind_name] = str(summary_result["draft_answer"])
-    context["used_tools"].append("grounded_summary_tool")
-
-
-def _fallback_grounded_summary_step(context: dict[str, Any], bind_name: str) -> None:
-    facts: AnalysisFacts = context["facts"]
-    annotations = list(context["annotations"])
-    references = build_reference_bundle(facts, annotations[: min(len(annotations), 20)])
-    recommendations = build_recommendations(facts)
-    ui_cards = build_ui_cards(facts, annotations)
-    context["references"] = references
-    context["recommendations"] = recommendations
-    context["ui_cards"] = ui_cards
-    context[bind_name] = build_draft_answer(
-        facts,
-        annotations,
-        [item.id for item in references],
-        [item.id for item in recommendations],
-    )
-
-
-VCF_CUSTOM_STEP_EXECUTORS: dict[str, Any] = {
-    "snpeff_execution_tool": (_execute_snpeff_step, None),
-    "cadd_lookup_tool": (_execute_cadd_step, None),
-    "revel_lookup_tool": (_execute_revel_step, None),
-    "grounded_summary_tool": (_execute_grounded_summary_step, _fallback_grounded_summary_step),
-}
+VCF_CUSTOM_STEP_EXECUTORS: dict[str, Any] = {}
 
 
 def _run_vcf_workflow_step(step: dict[str, Any], context: dict[str, Any]) -> None:
