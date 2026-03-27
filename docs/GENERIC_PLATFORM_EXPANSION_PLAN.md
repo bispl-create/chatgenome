@@ -318,6 +318,20 @@ Remaining cleanup:
 - consolidate the remaining source-specific OpenAI/general-chat paths
 - move more response-envelope wiring behind common helpers
 
+Additional progress on branch `codex/generic_tool`:
+
+- workflow response assembly was split into:
+  - `app/services/workflow_responses.py`
+- `workflows.py` now delegates:
+  - VCF analysis response assembly
+  - summary-statistics workflow result assembly
+  - raw-QC workflow result assembly
+
+Remaining cleanup:
+
+- continue reducing response-specific helpers left in `workflows.py`
+- move upload/bootstrap response assembly out of `main.py`
+
 ## Stage 6. Convert Upload Bootstrap Into Workflow-Driven Source Initialization
 
 ### Objective
