@@ -277,6 +277,38 @@ def _unknown_tool_answer(tool_request: dict[str, object] | None) -> str:
     return f"`@{alias}` is not a registered ChatGenome tool."
 
 
+def _source_response_class(source_type: str) -> type[AnalysisChatResponse] | type[RawQcChatResponse] | type[SummaryStatsChatResponse]:
+    normalized = source_type.strip().lower()
+    if normalized == "vcf":
+        return AnalysisChatResponse
+    if normalized == "raw_qc":
+        return RawQcChatResponse
+    if normalized == "summary_stats":
+        return SummaryStatsChatResponse
+    raise NotImplementedError(f"Unsupported chat source type: {source_type}")
+
+
+def _basic_source_response(
+    source_type: str,
+    answer: str,
+    *,
+    used_fallback: bool = False,
+) -> AnalysisChatResponse | RawQcChatResponse | SummaryStatsChatResponse:
+    response_cls = _source_response_class(source_type)
+    return response_cls(answer=answer, citations=[], used_fallback=used_fallback)
+
+
+def _unknown_workflow_response(
+    source_type: str,
+    skill_request: dict[str, object],
+) -> AnalysisChatResponse | RawQcChatResponse | SummaryStatsChatResponse:
+    name = str(skill_request.get("name") or "workflow")
+    return _basic_source_response(
+        source_type,
+        f"`@skill {name}` is not a registered workflow for the current build.",
+    )
+
+
 def _workflow_template_context(source_type: str, workflow_name: str, workflow_result: dict[str, object]) -> dict[str, object]:
     source = source_type.strip().lower()
     context: dict[str, object] = {
@@ -1175,30 +1207,30 @@ def _execute_analysis_direct_plink(
     )
 
 
-ANALYSIS_DIRECT_TOOL_ENDPOINTS: dict[str, Any] = {
-    "liftover": _execute_analysis_direct_liftover,
-    "snpeff": _execute_analysis_direct_snpeff,
-    "ldblockshow": _execute_analysis_direct_ldblockshow,
-    "plink": _execute_analysis_direct_plink,
+DIRECT_TOOL_ENDPOINT_EXECUTORS: dict[str, dict[str, Any]] = {
+    "vcf": {
+        "liftover": _execute_analysis_direct_liftover,
+        "snpeff": _execute_analysis_direct_snpeff,
+        "ldblockshow": _execute_analysis_direct_ldblockshow,
+        "plink": _execute_analysis_direct_plink,
+    },
+    "raw_qc": {
+        "samtools": _execute_raw_qc_direct_samtools,
+    },
+    "summary_stats": {
+        "qqman": _execute_summary_stats_direct_qqman,
+    },
 }
 
 
-RAW_QC_DIRECT_TOOL_ENDPOINTS: dict[str, Any] = {
-    "samtools": _execute_raw_qc_direct_samtools,
-}
-
-
-SUMMARY_STATS_DIRECT_TOOL_ENDPOINTS: dict[str, Any] = {
-    "qqman": _execute_summary_stats_direct_qqman,
-}
-
-
-def _run_analysis_direct_tool(
-    payload: AnalysisChatRequest, tool_request: dict[str, object]
-) -> AnalysisChatResponse | None:
+def _run_direct_tool_for_source(
+    source_type: str,
+    payload: AnalysisChatRequest | RawQcChatRequest | SummaryStatsChatRequest,
+    tool_request: dict[str, object],
+) -> AnalysisChatResponse | RawQcChatResponse | SummaryStatsChatResponse | None:
     direct_chat = _tool_request_direct_chat_metadata(tool_request)
     endpoint = str(direct_chat.get("endpoint") or "").strip().lower()
-    executor = ANALYSIS_DIRECT_TOOL_ENDPOINTS.get(endpoint)
+    executor = DIRECT_TOOL_ENDPOINT_EXECUTORS.get(source_type, {}).get(endpoint)
     if executor is None:
         return None
     options = _parse_direct_tool_options(
@@ -1208,152 +1240,40 @@ def _run_analysis_direct_tool(
     return executor(payload, tool_request, direct_chat, options)
 
 
-def _run_raw_qc_direct_tool(
-    payload: RawQcChatRequest, tool_request: dict[str, object]
-) -> RawQcChatResponse | None:
-    direct_chat = _tool_request_direct_chat_metadata(tool_request)
-    endpoint = str(direct_chat.get("endpoint") or "").strip().lower()
-    executor = RAW_QC_DIRECT_TOOL_ENDPOINTS.get(endpoint)
-    if executor is None:
-        return None
-    options = _parse_direct_tool_options(
-        str(tool_request.get("remainder") or ""),
-        str(direct_chat.get("argument_mode") or ""),
-    )
-    return executor(payload, tool_request, direct_chat, options)
-
-
-def _run_summary_stats_direct_tool(
-    payload: SummaryStatsChatRequest, tool_request: dict[str, object]
-) -> SummaryStatsChatResponse | None:
-    direct_chat = _tool_request_direct_chat_metadata(tool_request)
-    endpoint = str(direct_chat.get("endpoint") or "").strip().lower()
-    executor = SUMMARY_STATS_DIRECT_TOOL_ENDPOINTS.get(endpoint)
-    if executor is None:
-        return None
-    options = _parse_direct_tool_options(
-        str(tool_request.get("remainder") or ""),
-        str(direct_chat.get("argument_mode") or ""),
-    )
-    return executor(payload, tool_request, direct_chat, options)
-
-
-ANALYSIS_TOOL_DISPATCH: dict[str, Any] = {}
-
-
-def _handle_analysis_at_tool_request(payload: AnalysisChatRequest, tool_request: dict[str, object]) -> AnalysisChatResponse | None:
+def _handle_at_tool_request_for_source(
+    source_type: str,
+    payload: AnalysisChatRequest | RawQcChatRequest | SummaryStatsChatRequest,
+    tool_request: dict[str, object],
+) -> AnalysisChatResponse | RawQcChatResponse | SummaryStatsChatResponse:
     manifest = tool_request.get("manifest")
     help_text = _resolve_tool_help_response(tool_request)
     if help_text is not None:
-        return AnalysisChatResponse(answer=help_text, citations=[], used_fallback=False)
-    mismatch_text = _resolve_tool_source_mismatch_response(tool_request, "vcf")
+        return _basic_source_response(source_type, help_text)
+    mismatch_text = _resolve_tool_source_mismatch_response(tool_request, source_type)
     if mismatch_text is not None:
-        return AnalysisChatResponse(answer=mismatch_text, citations=[], used_fallback=False)
+        return _basic_source_response(source_type, mismatch_text)
     if manifest is None:
-        return AnalysisChatResponse(
-            answer=_unknown_tool_answer(tool_request),
-            citations=[],
-            used_fallback=False,
-        )
-    direct_response = _run_analysis_direct_tool(payload, tool_request)
+        return _basic_source_response(source_type, _unknown_tool_answer(tool_request))
+    direct_response = _run_direct_tool_for_source(source_type, payload, tool_request)
     if direct_response is not None:
         return direct_response
-    dispatch = _dispatch_for_manifest(manifest, ANALYSIS_TOOL_DISPATCH)
-    if dispatch is not None:
-        return dispatch(payload, tool_request)
-    return None
+    return _basic_source_response(source_type, _unknown_tool_answer(tool_request))
 
 
-def _handle_analysis_skill_request(payload: AnalysisChatRequest, skill_request: dict[str, object]) -> AnalysisChatResponse:
+def _handle_skill_request_for_source(
+    source_type: str,
+    payload: AnalysisChatRequest | RawQcChatRequest | SummaryStatsChatRequest,
+    skill_request: dict[str, object],
+) -> AnalysisChatResponse | RawQcChatResponse | SummaryStatsChatResponse:
     manifest = skill_request.get("manifest")
-    help_text = _resolve_skill_help_response(skill_request, "vcf")
+    help_text = _resolve_skill_help_response(skill_request, source_type)
     if help_text is not None:
-        return AnalysisChatResponse(answer=help_text, citations=[], used_fallback=False)
+        return _basic_source_response(source_type, help_text)
     if manifest is None:
-        name = str(skill_request.get("name") or "workflow")
-        return AnalysisChatResponse(
-            answer=f"`@skill {name}` is not a registered workflow for the current build.",
-            citations=[],
-            used_fallback=False,
-        )
+        return _unknown_workflow_response(source_type, skill_request)
     workflow_name = str(manifest.get("name") or "")
-    workflow_result = _run_registered_workflow_for_source("vcf", workflow_name, payload.analysis)
-    response = _assemble_workflow_chat_response(manifest, workflow_result)
-    assert isinstance(response, AnalysisChatResponse)
-    return response
-
-
-RAW_QC_TOOL_DISPATCH: dict[str, Any] = {}
-
-
-def _handle_raw_qc_at_tool_request(payload: RawQcChatRequest, tool_request: dict[str, object]) -> RawQcChatResponse:
-    manifest = tool_request.get("manifest")
-    help_text = _resolve_tool_help_response(tool_request)
-    if help_text is not None:
-        return RawQcChatResponse(answer=help_text, citations=[], used_fallback=False)
-    mismatch_text = _resolve_tool_source_mismatch_response(tool_request, "raw_qc")
-    if mismatch_text is not None:
-        return RawQcChatResponse(answer=mismatch_text, citations=[], used_fallback=False)
-    if manifest is None:
-        return RawQcChatResponse(
-            answer=_unknown_tool_answer(tool_request),
-            citations=[],
-            used_fallback=False,
-        )
-    direct_response = _run_raw_qc_direct_tool(payload, tool_request)
-    if direct_response is not None:
-        return direct_response
-    dispatch = _dispatch_for_manifest(manifest, RAW_QC_TOOL_DISPATCH)
-    if dispatch is not None:
-        return dispatch(payload, tool_request)
-    return RawQcChatResponse(answer=_unknown_tool_answer(tool_request), citations=[], used_fallback=False)
-
-
-def _handle_raw_qc_skill_request(payload: RawQcChatRequest, skill_request: dict[str, object]) -> RawQcChatResponse:
-    manifest = skill_request.get("manifest")
-    help_text = _resolve_skill_help_response(skill_request, "raw_qc")
-    if help_text is not None:
-        return RawQcChatResponse(answer=help_text, citations=[], used_fallback=False)
-    if manifest is None:
-        name = str(skill_request.get("name") or "workflow")
-        return RawQcChatResponse(
-            answer=f"`@skill {name}` is not a registered workflow for the current build.",
-            citations=[],
-            used_fallback=False,
-        )
-    workflow_name = str(manifest.get("name") or "")
-    workflow_result = _run_registered_workflow_for_source("raw_qc", workflow_name, payload.analysis)
-    response = _assemble_workflow_chat_response(manifest, workflow_result)
-    assert isinstance(response, RawQcChatResponse)
-    return response
-
-
-def _handle_summary_stats_at_tool_request(
-    payload: SummaryStatsChatRequest, tool_request: dict[str, object]
-) -> SummaryStatsChatResponse:
-    manifest = tool_request.get("manifest")
-    help_text = _resolve_tool_help_response(tool_request)
-    if help_text is not None:
-        return SummaryStatsChatResponse(answer=help_text, citations=[], used_fallback=False)
-    mismatch_text = _resolve_tool_source_mismatch_response(tool_request, "summary_stats")
-    if mismatch_text is not None:
-        return SummaryStatsChatResponse(answer=mismatch_text, citations=[], used_fallback=False)
-    if manifest is None:
-        return SummaryStatsChatResponse(
-            answer=_unknown_tool_answer(tool_request),
-            citations=[],
-            used_fallback=False,
-        )
-    direct_response = _run_summary_stats_direct_tool(payload, tool_request)
-    if direct_response is not None:
-        return direct_response
-    dispatch = _dispatch_for_manifest(manifest, SUMMARY_STATS_TOOL_DISPATCH)
-    if dispatch is not None:
-        return dispatch(payload, tool_request)
-    return SummaryStatsChatResponse(answer=_unknown_tool_answer(tool_request), citations=[], used_fallback=False)
-
-
-SUMMARY_STATS_TOOL_DISPATCH: dict[str, Any] = {}
+    workflow_result = _run_registered_workflow_for_source(source_type, workflow_name, payload.analysis)
+    return _assemble_workflow_chat_response(manifest, workflow_result)
 
 def answer_analysis_chat(payload: AnalysisChatRequest) -> AnalysisChatResponse:
     if _needs_grounded_clarification(payload.question):
@@ -1366,7 +1286,9 @@ def answer_analysis_chat(payload: AnalysisChatRequest) -> AnalysisChatResponse:
     skill_request = _parse_skill_request(payload.question)
     if skill_request:
         try:
-            return _handle_analysis_skill_request(payload, skill_request)
+            response = _handle_skill_request_for_source("vcf", payload, skill_request)
+            assert isinstance(response, AnalysisChatResponse)
+            return response
         except Exception as exc:
             name = str(skill_request.get("name") or "workflow")
             return AnalysisChatResponse(
@@ -1378,9 +1300,9 @@ def answer_analysis_chat(payload: AnalysisChatRequest) -> AnalysisChatResponse:
     at_tool_request = _parse_at_tool_request(payload.question)
     if at_tool_request:
         try:
-            handled = _handle_analysis_at_tool_request(payload, at_tool_request)
-            if handled is not None:
-                return handled
+            response = _handle_at_tool_request_for_source("vcf", payload, at_tool_request)
+            assert isinstance(response, AnalysisChatResponse)
+            return response
         except Exception as exc:
             alias = str(at_tool_request.get("alias") or "tool")
             return AnalysisChatResponse(
@@ -1430,7 +1352,9 @@ def answer_raw_qc_chat(payload: RawQcChatRequest) -> RawQcChatResponse:
     skill_request = _parse_skill_request(payload.question)
     if skill_request:
         try:
-            return _handle_raw_qc_skill_request(payload, skill_request)
+            response = _handle_skill_request_for_source("raw_qc", payload, skill_request)
+            assert isinstance(response, RawQcChatResponse)
+            return response
         except Exception as exc:
             name = str(skill_request.get("name") or "workflow")
             return RawQcChatResponse(
@@ -1442,7 +1366,9 @@ def answer_raw_qc_chat(payload: RawQcChatRequest) -> RawQcChatResponse:
     at_tool_request = _parse_at_tool_request(payload.question)
     if at_tool_request:
         try:
-            return _handle_raw_qc_at_tool_request(payload, at_tool_request)
+            response = _handle_at_tool_request_for_source("raw_qc", payload, at_tool_request)
+            assert isinstance(response, RawQcChatResponse)
+            return response
         except Exception as exc:
             alias = str(at_tool_request.get("alias") or "tool")
             return RawQcChatResponse(
@@ -1539,7 +1465,9 @@ def answer_summary_stats_chat(payload: SummaryStatsChatRequest) -> SummaryStatsC
     at_tool_request = _parse_at_tool_request(payload.question)
     if at_tool_request:
         try:
-            return _handle_summary_stats_at_tool_request(payload, at_tool_request)
+            response = _handle_at_tool_request_for_source("summary_stats", payload, at_tool_request)
+            assert isinstance(response, SummaryStatsChatResponse)
+            return response
         except Exception as exc:
             alias = str(at_tool_request.get("alias") or "tool")
             return SummaryStatsChatResponse(
@@ -1551,20 +1479,7 @@ def answer_summary_stats_chat(payload: SummaryStatsChatRequest) -> SummaryStatsC
     skill_request = _parse_skill_request(payload.question)
     if skill_request:
         try:
-            manifest = skill_request.get("manifest")
-            help_text = _resolve_skill_help_response(skill_request, "summary_stats")
-            if help_text is not None:
-                return SummaryStatsChatResponse(answer=help_text, citations=[], used_fallback=False)
-            if manifest is None:
-                name = str(skill_request.get("name") or "workflow")
-                return SummaryStatsChatResponse(
-                    answer=f"`@skill {name}` is not a registered workflow for the current build.",
-                    citations=[],
-                    used_fallback=False,
-                )
-            workflow_name = str(manifest.get("name") or "")
-            workflow_result = _run_registered_workflow_for_source("summary_stats", workflow_name, payload.analysis)
-            response = _assemble_workflow_chat_response(manifest, workflow_result)
+            response = _handle_skill_request_for_source("summary_stats", payload, skill_request)
             assert isinstance(response, SummaryStatsChatResponse)
             return response
         except Exception as exc:

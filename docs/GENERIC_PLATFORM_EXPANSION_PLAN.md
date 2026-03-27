@@ -298,11 +298,25 @@ Additional progress on branch `codex/generic_tool`:
 
 - `analyze_vcf_workflow()` no longer falls back to the legacy hard-coded VCF path
 - representative VCF execution now goes through the structured manifest runner only
+- the dead `_analyze_vcf_workflow_legacy()` body has been removed from `workflows.py`
 
 Remaining cleanup:
 
-- delete the now-dead `_analyze_vcf_workflow_legacy()` body
-- remove dead VCF helper functions that were only serving the legacy path
+- continue reducing workflow/source-specific response assembly in `workflows.py`
+- continue shrinking `chat.py` into a parser/router
+
+Additional progress on branch `codex/generic_tool`:
+
+- `chat.py` now uses shared source-agnostic helpers for:
+  - `@tool` help / mismatch / unknown-tool handling
+  - direct tool execution dispatch by `source_type`
+  - `@skill` workflow execution dispatch by `source_type`
+- empty source-specific tool dispatch registries and duplicate source-specific `@tool` / `@skill` handler functions were removed
+
+Remaining cleanup:
+
+- consolidate the remaining source-specific OpenAI/general-chat paths
+- move more response-envelope wiring behind common helpers
 
 ## Stage 6. Convert Upload Bootstrap Into Workflow-Driven Source Initialization
 
