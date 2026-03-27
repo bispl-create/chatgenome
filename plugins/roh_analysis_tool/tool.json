@@ -1,5 +1,6 @@
 {
   "name": "roh_analysis_tool",
+  "entrypoint": "plugins.roh_analysis_tool.logic:execute",
   "description": "Run bcftools roh-based runs-of-homozygosity analysis and return ROH segments.",
   "task": "roh-analysis",
   "modality": "genomics",

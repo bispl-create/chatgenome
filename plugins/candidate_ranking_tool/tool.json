@@ -1,5 +1,6 @@
 {
   "name": "candidate_ranking_tool",
+  "entrypoint": "plugins.candidate_ranking_tool.logic:execute",
   "description": "Ranks annotated variants into a short candidate review list using clinical and ROH-aware heuristics.",
   "task": "candidate-ranking",
   "modality": "genomics",

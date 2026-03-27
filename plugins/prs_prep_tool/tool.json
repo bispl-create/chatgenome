@@ -1,5 +1,6 @@
 {
   "name": "prs_prep_tool",
+  "entrypoint": "plugins.prs_prep_tool.logic:execute",
   "description": "Analyze a summary-statistics source for build check, harmonization readiness, and PLINK score-file preparation.",
   "task": "prs-prep",
   "modality": "genomics",

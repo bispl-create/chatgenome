@@ -1,5 +1,6 @@
 {
   "name": "snpeff_execution_tool",
+  "entrypoint": "plugins.snpeff_execution_tool.logic:execute",
   "description": "Run local SnpEff annotation on a VCF using the installed Java runtime and local SnpEff genome databases.",
   "task": "variant-annotation-execution",
   "modality": "genomics",

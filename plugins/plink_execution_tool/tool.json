@@ -1,5 +1,6 @@
 {
   "name": "plink_execution_tool",
+  "entrypoint": "plugins.plink_execution_tool.logic:execute",
   "description": "Run local PLINK 2 QC commands on a VCF.",
   "task": "variant-qc",
   "modality": "genomics",

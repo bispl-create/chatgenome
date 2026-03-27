@@ -1,5 +1,6 @@
 {
   "name": "ldblockshow_execution_tool",
+  "entrypoint": "plugins.ldblockshow_execution_tool.logic:execute",
   "description": "Run local LDBlockShow on a VCF locus and generate LD heatmap artifacts such as SVG and block tables.",
   "task": "ld-heatmap-visualization",
   "modality": "genomics",

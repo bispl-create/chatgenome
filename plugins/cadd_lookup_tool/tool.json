@@ -1,5 +1,6 @@
 {
   "name": "cadd_lookup_tool",
+  "entrypoint": "plugins.cadd_lookup_tool.logic:execute",
   "description": "Enrich shortlisted annotated variants with local CADD lookup scores when a build-matched local table is available.",
   "task": "variant-score-lookup",
   "modality": "genomics",

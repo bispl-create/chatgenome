@@ -1,5 +1,6 @@
 {
   "name": "raw_qc_review_tool",
+  "entrypoint": "plugins.raw_qc_review_tool.logic:execute",
   "description": "Run the default FastQC-based raw sequencing review on the active FASTQ, BAM, or SAM source.",
   "task": "raw-qc-review",
   "modality": "genomics",

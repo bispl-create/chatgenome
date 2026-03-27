@@ -1,5 +1,6 @@
 {
   "name": "revel_lookup_tool",
+  "entrypoint": "plugins.revel_lookup_tool.logic:execute",
   "description": "Enrich shortlisted missense variants with local REVEL scores when a matching local segment file is available.",
   "task": "missense-score-lookup",
   "modality": "genomics",

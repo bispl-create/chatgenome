@@ -1,5 +1,6 @@
 {
   "name": "qqman_execution_tool",
+  "entrypoint": "plugins.qqman_execution_tool.logic:execute",
   "description": "Render Manhattan and QQ plots from GWAS-style summary statistics using the locally checked out qqman repository.",
   "task": "gwas-visualization",
   "modality": "genomics",

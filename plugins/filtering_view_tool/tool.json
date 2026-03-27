@@ -1,5 +1,6 @@
 {
   "name": "filtering_view_tool",
+  "entrypoint": "plugins.filtering_view_tool.logic:execute",
   "description": "Builds searchable variant-table summary metrics for the filtering and triage view.",
   "task": "filtering-view",
   "modality": "genomics",

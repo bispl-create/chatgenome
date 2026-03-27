@@ -1,5 +1,6 @@
 {
   "name": "summary_stats_review_tool",
+  "entrypoint": "plugins.summary_stats_review_tool.logic:execute",
   "description": "Analyze a summary-statistics file into detected columns, inferred mappings, preview rows, and draft intake guidance.",
   "task": "summary-stats-review",
   "modality": "genomics",
