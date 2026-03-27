@@ -12,7 +12,8 @@ Each new tool should live under:
 ```text
 plugins/<tool_folder>/
   tool.json
-  run.py
+  logic.py
+  run.py   # optional compatibility wrapper
 ```
 
 ## Required Metadata
@@ -22,6 +23,7 @@ Your `tool.json` should include:
 ```json
 {
   "name": "example_execution_tool",
+  "entrypoint": "plugins.example_execution_tool.logic:execute",
   "description": "Short deterministic tool summary.",
   "task": "example-task",
   "modality": "genomics",
@@ -45,6 +47,11 @@ Use `help` metadata for:
 - `@toolname help`
 - option documentation
 - curated examples
+
+Use `entrypoint` metadata for:
+- generic backend execution through `tool_runner.run_tool()`
+- plugin-native routing without requiring a per-tool subprocess wrapper
+- gradually making `run.py` optional
 
 ## Workflow-Aware Metadata
 
@@ -78,20 +85,29 @@ Meaning:
 - `preprocess`: optional reusable payload-preparation hook
 - `postprocess`: optional reusable bind/merge hook after tool execution
 
-## Required Runtime Contract
+## Runtime Contract
 
-`run.py` is expected to support:
+Preferred contract:
+- implement `execute(payload)` in `logic.py`
+- declare `"entrypoint": "plugins.<tool_folder>.logic:execute"` in `tool.json`
+
+Optional compatibility contract:
+- keep a thin `run.py` that supports:
 
 ```bash
 python run.py --input <input.json> --output <output.json>
 ```
 
-The script should:
+If `run.py` is present, it should:
 
 1. read JSON from `--input`
 2. perform deterministic work
 3. write JSON to `--output`
 4. exit successfully on success
+
+Current platform behavior:
+- if `tool.json.entrypoint` exists, backend execution prefers direct import/execute
+- if `entrypoint` is missing, backend falls back to `run.py`
 
 ## Required Integration Steps
 
@@ -99,11 +115,10 @@ After adding the plugin files, make sure you also:
 
 1. define the request/response shape in
    - [../app/models.py](../app/models.py)
-2. add execution wiring in backend runtime
-   - usually in [../app/main.py](../app/main.py),
-   - [../app/services/chat.py](../app/services/chat.py), or
-   - [../app/services/workflows.py](../app/services/workflows.py)
-   - prefer `workflow_binding` metadata before adding bespoke workflow code
+2. prefer metadata-first execution wiring
+   - add `entrypoint` in `tool.json`
+   - add `workflow_binding` before adding bespoke workflow code
+   - avoid changing [../app/main.py](../app/main.py), [../app/services/chat.py](../app/services/chat.py), or [../app/services/workflows.py](../app/services/workflows.py) unless the tool introduces a genuinely new behavior type
 3. add Studio rendering in
    - [../webapp/app/page.tsx](../webapp/app/page.tsx)
 4. update orchestrator policy in
@@ -115,7 +130,10 @@ After adding the plugin files, make sure you also:
 Python syntax:
 
 ```bash
-PYTHONPATH=/Users/jongcye/Documents/Codex/.vendor PYTHONPYCACHEPREFIX=/tmp python3 -m py_compile app/main.py app/models.py app/services/*.py plugins/<tool_folder>/run.py
+PYTHONPATH=/Users/jongcye/Documents/Codex/.vendor PYTHONPYCACHEPREFIX=/tmp python3 -m py_compile app/main.py app/models.py app/services/*.py plugins/<tool_folder>/logic.py
+
+# if you keep a compatibility wrapper:
+PYTHONPATH=/Users/jongcye/Documents/Codex/.vendor PYTHONPYCACHEPREFIX=/tmp python3 -m py_compile plugins/<tool_folder>/run.py
 ```
 
 Frontend build:

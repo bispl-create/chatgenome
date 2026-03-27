@@ -8,7 +8,8 @@ The long-term target is:
 
 - Adding a new tool should usually require only:
   - `plugins/<tool>/tool.json`
-  - `plugins/<tool>/run.py`
+  - `plugins/<tool>/logic.py`
+  - optional `plugins/<tool>/run.py`
 - Adding a new workflow should usually require only:
   - `skills/.../workflows/<workflow>.json`
 - Core files such as:
@@ -570,7 +571,8 @@ This keeps the application working continuously throughout the migration.
 Normally add only:
 
 - `plugins/<tool>/tool.json`
-- `plugins/<tool>/run.py`
+- `plugins/<tool>/logic.py`
+- optional `plugins/<tool>/run.py`
 
 Rare exceptions:
 
