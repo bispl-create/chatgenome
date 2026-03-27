@@ -277,81 +277,102 @@ def _unknown_tool_answer(tool_request: dict[str, object] | None) -> str:
     return f"`@{alias}` is not a registered ChatGenome tool."
 
 
-def _dispatch_for_manifest(
-    manifest: object, dispatch_table: dict[str, Any]
-) -> Any | None:
-    if not isinstance(manifest, dict):
-        return None
-    name = str(manifest.get("name") or "")
-    return dispatch_table.get(name)
+def _workflow_template_context(source_type: str, workflow_name: str, workflow_result: dict[str, object]) -> dict[str, object]:
+    source = source_type.strip().lower()
+    context: dict[str, object] = {
+        "workflow_name": workflow_name,
+        "requested_view": str(workflow_result.get("requested_view") or ""),
+    }
+    if source == "vcf":
+        analysis = workflow_result.get("analysis")
+        context.update(
+            {
+                "active_file": getattr(getattr(analysis, "facts", None), "file_name", "unknown"),
+                "logged_tools": ", ".join(getattr(analysis, "used_tools", []) or []) or "none",
+                "candidate_count": len(getattr(analysis, "candidate_variants", []) or []),
+            }
+        )
+    elif source == "raw_qc":
+        analysis = workflow_result.get("analysis")
+        context.update(
+            {
+                "active_file": getattr(getattr(analysis, "facts", None), "file_name", "unknown"),
+                "logged_tools": ", ".join(getattr(analysis, "used_tools", []) or []) or "none",
+                "module_count": len(getattr(analysis, "modules", []) or []),
+            }
+        )
+    elif source == "summary_stats":
+        analysis = workflow_result.get("analysis")
+        prs_prep_result = workflow_result.get("prs_prep_result")
+        context.update(
+            {
+                "active_file": getattr(analysis, "file_name", "unknown"),
+                "logged_tools": ", ".join(getattr(analysis, "used_tools", []) or []) or "none",
+                "row_count": getattr(analysis, "row_count", "unknown"),
+                "score_file_ready": getattr(prs_prep_result, "score_file_ready", "unknown"),
+                "kept_rows": getattr(prs_prep_result, "kept_rows", "unknown"),
+                "dropped_rows": getattr(prs_prep_result, "dropped_rows", "unknown"),
+            }
+        )
+    return context
 
 
-def _dispatch_analysis_representative_vcf_review(
-    payload: AnalysisChatRequest,
-    skill_request: dict[str, object],
-) -> AnalysisChatResponse:
-    workflow_result = run_registered_analysis_workflow(
-        str(skill_request["manifest"]["name"]),
-        payload.analysis,
-    )
-    return AnalysisChatResponse(
-        answer=str(workflow_result["answer"]),
-        citations=[],
-        used_fallback=False,
-        requested_view=str(workflow_result.get("requested_view") or "summary"),
-        analysis=workflow_result.get("analysis"),
-    )
+def _render_workflow_answer(manifest: dict[str, object], workflow_result: dict[str, object]) -> str:
+    template = str(manifest.get("answer_template") or "").strip()
+    if not template:
+        return str(workflow_result.get("answer") or "").strip()
+    workflow_name = str(manifest.get("name") or "workflow")
+    source_type = str(manifest.get("source_type") or "").strip().lower()
+    context = _workflow_template_context(source_type, workflow_name, workflow_result)
+    try:
+        return template.format(**context)
+    except Exception:
+        return str(workflow_result.get("answer") or "").strip()
 
 
-def _dispatch_raw_qc_review_workflow(
-    payload: RawQcChatRequest,
-    skill_request: dict[str, object],
-) -> RawQcChatResponse:
-    workflow_result = run_registered_raw_qc_workflow(
-        str(skill_request["manifest"]["name"]),
-        payload.analysis,
-    )
-    return RawQcChatResponse(
-        answer=str(workflow_result["answer"]),
-        citations=[],
-        used_fallback=False,
-        requested_view=str(workflow_result.get("requested_view") or "rawqc"),
-        analysis=workflow_result.get("analysis"),
-    )
+def _run_registered_workflow_for_source(source_type: str, workflow_name: str, analysis: object) -> dict[str, object]:
+    source = source_type.strip().lower()
+    if source == "vcf":
+        return run_registered_analysis_workflow(workflow_name, analysis)
+    if source == "raw_qc":
+        return run_registered_raw_qc_workflow(workflow_name, analysis)
+    if source == "summary_stats":
+        return run_registered_summary_stats_workflow(workflow_name, analysis)
+    raise NotImplementedError(f"Unsupported workflow source type: {source_type}")
 
 
-def _dispatch_summary_stats_registered_workflow(
-    payload: SummaryStatsChatRequest,
-    skill_request: dict[str, object],
-) -> SummaryStatsChatResponse:
-    workflow_result = run_registered_summary_stats_workflow(
-        str(skill_request["manifest"]["name"]),
-        payload.analysis,
-    )
-    return SummaryStatsChatResponse(
-        answer=str(workflow_result["answer"]),
-        citations=[],
-        used_fallback=False,
-        requested_view=str(workflow_result.get("requested_view") or "sumstats"),
-        analysis=workflow_result.get("analysis"),
-        prs_prep_result=workflow_result.get("prs_prep_result"),
-    )
-
-
-ANALYSIS_WORKFLOW_DISPATCH: dict[str, Any] = {
-    "representative_vcf_review": _dispatch_analysis_representative_vcf_review,
-}
-
-
-RAW_QC_WORKFLOW_DISPATCH: dict[str, Any] = {
-    "raw_qc_review": _dispatch_raw_qc_review_workflow,
-}
-
-
-SUMMARY_STATS_WORKFLOW_DISPATCH: dict[str, Any] = {
-    "summary_stats_review": _dispatch_summary_stats_registered_workflow,
-    "prs_prep": _dispatch_summary_stats_registered_workflow,
-}
+def _assemble_workflow_chat_response(
+    manifest: dict[str, object], workflow_result: dict[str, object]
+) -> AnalysisChatResponse | RawQcChatResponse | SummaryStatsChatResponse:
+    response_kind = str(manifest.get("response_kind") or "").strip().lower()
+    requested_view = str(workflow_result.get("requested_view") or manifest.get("requested_view") or "").strip() or None
+    answer = _render_workflow_answer(manifest, workflow_result)
+    if response_kind == "analysis_chat":
+        return AnalysisChatResponse(
+            answer=answer,
+            citations=[],
+            used_fallback=False,
+            requested_view=requested_view,
+            analysis=workflow_result.get("analysis"),
+        )
+    if response_kind == "raw_qc_chat":
+        return RawQcChatResponse(
+            answer=answer,
+            citations=[],
+            used_fallback=False,
+            requested_view=requested_view,
+            analysis=workflow_result.get("analysis"),
+        )
+    if response_kind == "summary_stats_chat":
+        return SummaryStatsChatResponse(
+            answer=answer,
+            citations=[],
+            used_fallback=False,
+            requested_view=requested_view,
+            analysis=workflow_result.get("analysis"),
+            prs_prep_result=workflow_result.get("prs_prep_result"),
+        )
+    raise NotImplementedError(f"Unsupported workflow response kind: {response_kind or 'unknown'}")
 
 
 def _with_result_field(result_kind: str | None, result: object, **kwargs: Any) -> dict[str, Any]:
@@ -1255,15 +1276,11 @@ def _handle_analysis_skill_request(payload: AnalysisChatRequest, skill_request: 
             citations=[],
             used_fallback=False,
         )
-    dispatch = _dispatch_for_manifest(manifest, ANALYSIS_WORKFLOW_DISPATCH)
-    if dispatch is not None:
-        return dispatch(payload, skill_request)
     workflow_name = str(manifest.get("name") or "")
-    return AnalysisChatResponse(
-        answer=f"`@skill {workflow_name}` is registered but not yet executable in analysis chat.",
-        citations=[],
-        used_fallback=False,
-    )
+    workflow_result = _run_registered_workflow_for_source("vcf", workflow_name, payload.analysis)
+    response = _assemble_workflow_chat_response(manifest, workflow_result)
+    assert isinstance(response, AnalysisChatResponse)
+    return response
 
 
 RAW_QC_TOOL_DISPATCH: dict[str, Any] = {}
@@ -1304,15 +1321,11 @@ def _handle_raw_qc_skill_request(payload: RawQcChatRequest, skill_request: dict[
             citations=[],
             used_fallback=False,
         )
-    dispatch = _dispatch_for_manifest(manifest, RAW_QC_WORKFLOW_DISPATCH)
-    if dispatch is not None:
-        return dispatch(payload, skill_request)
     workflow_name = str(manifest.get("name") or "")
-    return RawQcChatResponse(
-        answer=f"`@skill {workflow_name}` is registered but not yet executable in raw-QC chat.",
-        citations=[],
-        used_fallback=False,
-    )
+    workflow_result = _run_registered_workflow_for_source("raw_qc", workflow_name, payload.analysis)
+    response = _assemble_workflow_chat_response(manifest, workflow_result)
+    assert isinstance(response, RawQcChatResponse)
+    return response
 
 
 def _handle_summary_stats_at_tool_request(
@@ -1549,15 +1562,11 @@ def answer_summary_stats_chat(payload: SummaryStatsChatRequest) -> SummaryStatsC
                     citations=[],
                     used_fallback=False,
                 )
-            dispatch = _dispatch_for_manifest(manifest, SUMMARY_STATS_WORKFLOW_DISPATCH)
-            if dispatch is not None:
-                return dispatch(payload, skill_request)
             workflow_name = str(manifest.get("name") or "")
-            return SummaryStatsChatResponse(
-                answer=f"`@skill {workflow_name}` is registered but not yet executable in summary-statistics chat.",
-                citations=[],
-                used_fallback=False,
-            )
+            workflow_result = _run_registered_workflow_for_source("summary_stats", workflow_name, payload.analysis)
+            response = _assemble_workflow_chat_response(manifest, workflow_result)
+            assert isinstance(response, SummaryStatsChatResponse)
+            return response
         except Exception as exc:
             name = str(skill_request.get("name") or "workflow")
             return SummaryStatsChatResponse(
