@@ -1,6 +1,85 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
 import { type StudioRendererBuilderArgs, type StudioRendererRegistry } from "./studioRendererTypes";
+
+function TextMarkdownCard({
+  apiBase,
+  textAnalysis,
+}: {
+  apiBase: string;
+  textAnalysis: {
+    source_text_path?: string | null;
+    preview_lines: string[];
+  };
+}) {
+  const [content, setContent] = useState<string>(textAnalysis.preview_lines.join("\n"));
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!textAnalysis.source_text_path) {
+      setContent(textAnalysis.preview_lines.join("\n"));
+      setLoadError(null);
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadTextSource() {
+      setLoading(true);
+      setLoadError(null);
+      try {
+        const response = await fetch(
+          `${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(textAnalysis.source_text_path as string)}`,
+        );
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const nextContent = await response.text();
+        if (!cancelled) {
+          setContent(nextContent);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setContent(textAnalysis.preview_lines.join("\n"));
+          setLoadError(error instanceof Error ? error.message : "Failed to load full text.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadTextSource();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase, textAnalysis.preview_lines, textAnalysis.source_text_path]);
+
+  return (
+    <article className="miniCard">
+      <h3>Document</h3>
+      {loading ? <p className="resultNote">Loading full text…</p> : null}
+      {loadError ? <p className="resultNote">Showing preview only: {loadError}</p> : null}
+      <div
+        className="markdownAnswer"
+        style={{
+          maxHeight: "28rem",
+          overflowY: "auto",
+          paddingRight: "0.25rem",
+        }}
+      >
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      </div>
+    </article>
+  );
+}
 
 export function buildGenericStudioRendererRegistry({
   apiBase,
@@ -206,16 +285,7 @@ export function buildGenericStudioRendererRegistry({
                 { label: "Lines", value: String(textAnalysis.line_count) },
               ]}
             />
-            <article className="miniCard">
-              <h3>Preview</h3>
-              <StudioSimpleList
-                items={(textAnalysis.preview_lines || []).map((line: string, index: number) => ({
-                  label: `Line ${index + 1}`,
-                  detail: line,
-                }))}
-                emptyLabel="No preview lines are available for this text source."
-              />
-            </article>
+            <TextMarkdownCard apiBase={apiBase} textAnalysis={textAnalysis} />
             <WarningListCard warnings={textAnalysis.warnings} />
           </div>
         </section>
