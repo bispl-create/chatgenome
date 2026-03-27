@@ -707,6 +707,27 @@ function MetricTile({
   );
 }
 
+type MetricItem = {
+  label: string;
+  value: string;
+  tone?: "neutral" | "good" | "warn";
+};
+
+function StudioMetricGrid({ items }: { items: MetricItem[] }) {
+  return (
+    <div className="resultMetricGrid">
+      {items.map((item) => (
+        <MetricTile
+          key={`${item.label}-${item.value}`}
+          label={item.label}
+          value={item.value}
+          tone={item.tone ?? "neutral"}
+        />
+      ))}
+    </div>
+  );
+}
+
 function DistributionList({
   items,
   emptyLabel,
@@ -735,6 +756,64 @@ function DistributionList({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+type WarningListCardProps = {
+  warnings: string[];
+  emptyLabel?: string;
+  emptyAsParagraph?: boolean;
+  titleBuilder?: (index: number) => string;
+};
+
+function WarningListCard({
+  warnings,
+  emptyLabel,
+  emptyAsParagraph = false,
+  titleBuilder = (index) => `Warning ${index + 1}`,
+}: WarningListCardProps) {
+  if (!warnings.length) {
+    if (!emptyLabel) {
+      return null;
+    }
+    return emptyAsParagraph ? <p className="emptyState">{emptyLabel}</p> : <div className="resultList"><article className="resultListItem resultListStatic"><strong>Status</strong><span>{emptyLabel}</span></article></div>;
+  }
+
+  return (
+    <div className="resultList">
+      {warnings.map((warning, index) => (
+        <article key={`${warning}-${index}`} className="resultListItem resultListStatic">
+          <strong>{titleBuilder(index)}</strong>
+          <span>{warning}</span>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+type ArtifactLinkItem = {
+  label: string;
+  href: string;
+};
+
+function ArtifactLinksRow({ items }: { items: ArtifactLinkItem[] }) {
+  if (!items.length) {
+    return null;
+  }
+  return (
+    <div className="resultActionRow">
+      {items.map((item) => (
+        <a
+          key={`${item.label}-${item.href}`}
+          className="sourceAddButton"
+          href={item.href}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {item.label}
+        </a>
+      ))}
     </div>
   );
 }
@@ -3836,11 +3915,13 @@ export default function Page() {
                 <h2>qqman Plots</h2>
               </div>
               <div className="studioCanvasBody">
-                <div className="resultMetricGrid">
-                  <MetricTile label="Tool" value={qqmanResultForStudio.tool} tone="good" />
-                  <MetricTile label="Artifacts" value={String(qqmanResultForStudio.artifacts.length)} tone="neutral" />
-                  <MetricTile label="Warnings" value={String(qqmanResultForStudio.warnings.length)} tone="neutral" />
-                </div>
+                <StudioMetricGrid
+                  items={[
+                    { label: "Tool", value: qqmanResultForStudio.tool, tone: "good" },
+                    { label: "Artifacts", value: String(qqmanResultForStudio.artifacts.length) },
+                    { label: "Warnings", value: String(qqmanResultForStudio.warnings.length) },
+                  ]}
+                />
                 <div className="resultList">
                   <article className="resultListItem resultListStatic">
                     <strong>Command preview</strong>
@@ -3870,16 +3951,7 @@ export default function Page() {
                     </article>
                   ))}
                 </div>
-                {qqmanResultForStudio.warnings.length ? (
-                  <div className="resultList">
-                    {qqmanResultForStudio.warnings.map((warning, index) => (
-                      <article key={`qqman-warning-${index}`} className="resultListItem resultListStatic">
-                        <strong>Warning {index + 1}</strong>
-                        <span>{warning}</span>
-                      </article>
-                    ))}
-                  </div>
-                ) : null}
+                <WarningListCard warnings={qqmanResultForStudio.warnings} />
               </div>
             </section>
           ) : null}
@@ -4006,11 +4078,13 @@ export default function Page() {
               <div className="studioCanvasBody">
                 {snpeffResultForStudio ? (
                   <>
-                    <div className="resultMetricGrid">
-                      <MetricTile label="Genome DB" value={snpeffResultForStudio.genome} tone="good" />
-                      <MetricTile label="Preview rows" value={String(snpeffResultForStudio.parsed_records.length)} tone="neutral" />
-                      <MetricTile label="Tool" value={snpeffResultForStudio.tool} tone="neutral" />
-                    </div>
+                    <StudioMetricGrid
+                      items={[
+                        { label: "Genome DB", value: snpeffResultForStudio.genome, tone: "good" },
+                        { label: "Preview rows", value: String(snpeffResultForStudio.parsed_records.length) },
+                        { label: "Tool", value: snpeffResultForStudio.tool },
+                      ]}
+                    />
                     <div className="resultList">
                       {snpeffResultForStudio.parsed_records.map((record, index) => (
                         <article key={`${record.contig}-${record.pos_1based}-${record.alt}-${index}`} className="resultListItem resultListStatic">
@@ -4028,16 +4102,14 @@ export default function Page() {
                         </article>
                       ))}
                     </div>
-                    <div className="resultActionRow">
-                      <a
-                        className="sourceAddButton"
-                        href={`file://${snpeffResultForStudio.output_path}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open annotated VCF
-                      </a>
-                    </div>
+                    <ArtifactLinksRow
+                      items={[
+                        {
+                          label: "Open annotated VCF",
+                          href: `file://${snpeffResultForStudio.output_path}`,
+                        },
+                      ]}
+                    />
                   </>
                 ) : (
                   <p className="emptyState">No auxiliary SnpEff result is available for the current analysis.</p>
@@ -4498,55 +4570,46 @@ export default function Page() {
                           <span>{ldblockshowResultForStudio.attempted_regions.join(" -> ")}</span>
                         </article>
                       ) : null}
-                      {ldblockshowResultForStudio.warnings.length ? (
-                        ldblockshowResultForStudio.warnings.map((warning, index) => (
-                          <article key={`ldblockshow-warning-${index}`} className="resultListItem resultListStatic">
-                            <strong>Warning {index + 1}</strong>
-                            <span>{warning}</span>
-                          </article>
-                        ))
-                      ) : (
-                        <p className="emptyState">No LDBlockShow warnings were reported.</p>
-                      )}
                     </div>
-                    <div className="resultActionRow">
-                      {ldblockshowResultForStudio.svg_path ? (
-                        <a
-                          className="sourceAddButton"
-                          href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            ldblockshowResultForStudio.svg_path,
-                          )}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Open LD SVG
-                        </a>
-                      ) : null}
-                      {ldblockshowResultForStudio.block_path ? (
-                        <a
-                          className="sourceAddButton"
-                          href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            ldblockshowResultForStudio.block_path,
-                          )}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Open block table
-                        </a>
-                      ) : null}
-                      {ldblockshowResultForStudio.site_path ? (
-                        <a
-                          className="sourceAddButton"
-                          href={`${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
-                            ldblockshowResultForStudio.site_path,
-                          )}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Open site table
-                        </a>
-                      ) : null}
-                    </div>
+                    <WarningListCard
+                      warnings={ldblockshowResultForStudio.warnings}
+                      emptyLabel="No LDBlockShow warnings were reported."
+                      emptyAsParagraph
+                    />
+                    <ArtifactLinksRow
+                      items={[
+                        ...(ldblockshowResultForStudio.svg_path
+                          ? [
+                              {
+                                label: "Open LD SVG",
+                                href: `${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                                  ldblockshowResultForStudio.svg_path,
+                                )}`,
+                              },
+                            ]
+                          : []),
+                        ...(ldblockshowResultForStudio.block_path
+                          ? [
+                              {
+                                label: "Open block table",
+                                href: `${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                                  ldblockshowResultForStudio.block_path,
+                                )}`,
+                              },
+                            ]
+                          : []),
+                        ...(ldblockshowResultForStudio.site_path
+                          ? [
+                              {
+                                label: "Open site table",
+                                href: `${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(
+                                  ldblockshowResultForStudio.site_path,
+                                )}`,
+                              },
+                            ]
+                          : []),
+                      ]}
+                    />
                   </>
                 ) : (
                   <p className="emptyState">No LDBlockShow result is available for the current analysis.</p>
