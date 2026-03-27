@@ -1,0 +1,69 @@
+"use client";
+
+import { type ReactNode, type RefObject } from "react";
+
+export type StudioRendererRegistry = Partial<Record<string, () => ReactNode>>;
+
+export type StudioRendererBuilderArgs = {
+  apiBase: string;
+  analysis: any;
+  rawQcAnalysis: any;
+  summaryStatsAnalysis: any;
+  prsPrepResultForStudio: any;
+  qqmanResultForStudio: any;
+  samtoolsResultForStudio: any;
+  snpeffResultForStudio: any;
+  plinkResultForStudio: any;
+  liftoverResultForStudio: any;
+  ldblockshowResultForStudio: any;
+  summaryStatsGridRows: Array<Record<string, string>>;
+  summaryStatsRowsLoading: boolean;
+  summaryStatsHasMore: boolean;
+  summaryStatsGridRef: RefObject<HTMLDivElement | null>;
+  handleSummaryStatsGridScroll: (event: any) => void;
+  loadMoreSummaryStatsRows: () => Promise<void>;
+  candidateVariants: any[];
+  searchedAnnotations: any[];
+  setSelectedAnnotationIndex: (index: number) => void;
+  setActiveStudioView: (view: any) => void;
+  buildAcmgHints: (item: any) => string[];
+  annotationScope: string;
+  annotationLimit: string;
+  qcMetrics: any;
+  clinicalCoverage: Array<{ label: string; detail: string }>;
+  plinkConfig: any;
+  setPlinkConfig: (updater: any) => void;
+  plinkCommandPreview: string;
+  handleRunPlink: () => Promise<void>;
+  plinkRunning: boolean;
+  activeSource: any;
+  attachedFile: File | null;
+  filteringSummary: Array<{ label: string; detail: string }>;
+  annotationSearch: string;
+  setAnnotationSearch: (value: string) => void;
+  symbolicAnnotations: any[];
+  rohCandidates: { segments: any[] };
+  recessiveShortlist: any[];
+  clinvarCounts: Array<{ label: string; count: number }>;
+  consequenceCounts: Array<{ label: string; count: number }>;
+  geneCounts: Array<{ label: string; count: number }>;
+  safeSelectedIndex: number;
+  selectedAnnotation: any;
+  components: {
+    StudioMetricGrid: any;
+    StudioPreviewTable: any;
+    WarningListCard: any;
+    ArtifactLinksRow: any;
+    StudioSimpleList: any;
+    DistributionList: any;
+    VariantTable: any;
+    MetricTile: any;
+    ReferenceListCard: any;
+    AnnotationDetailCard: any;
+  };
+  helpers: {
+    formatPercent: (value?: number | null) => string;
+    formatNumber: (value?: number | null) => string;
+    summarizeLabel: (value: string, fallback: string) => string;
+  };
+};
