@@ -1,7 +1,159 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
+
 import IgvBrowser from "./IgvBrowser";
 import { type StudioRendererBuilderArgs, type StudioRendererRegistry } from "./studioRendererTypes";
+
+function CohortBrowserCard({
+  analysis,
+  components,
+  helpers,
+}: {
+  analysis: any;
+  components: StudioRendererBuilderArgs["components"];
+  helpers: StudioRendererBuilderArgs["helpers"];
+}) {
+  const { StudioMetricGrid, StudioPreviewTable, StudioSimpleList, WarningListCard } = components;
+  const { formatNumber } = helpers;
+  const sheetNames = Array.isArray(analysis?.sheet_names) ? analysis.sheet_names : [];
+  const initialSheet =
+    (typeof analysis?.selected_sheet === "string" && analysis.selected_sheet.trim()) ||
+    sheetNames[0] ||
+    null;
+  const [selectedSheet, setSelectedSheet] = useState<string | null>(initialSheet);
+
+  useEffect(() => {
+    setSelectedSheet(initialSheet);
+  }, [initialSheet]);
+
+  const artifact = useMemo(() => {
+    if (!selectedSheet || !analysis?.artifacts) {
+      return null;
+    }
+    return analysis.artifacts[`sheet::${selectedSheet}::cohort_browser`] ?? null;
+  }, [analysis, selectedSheet]);
+
+  const sheetDetails = useMemo(() => {
+    const details = Array.isArray(analysis?.sheet_details) ? analysis.sheet_details : [];
+    return details.find((item: any) => item?.sheet_name === selectedSheet) ?? null;
+  }, [analysis, selectedSheet]);
+
+  const previewRows = Array.isArray(artifact?.grid?.rows)
+    ? artifact.grid.rows.map((row: Record<string, unknown>) =>
+        Object.fromEntries(Object.entries(row).map(([key, value]) => [key, String(value ?? "")])),
+      )
+    : [];
+  const previewColumns = Array.isArray(artifact?.grid?.columns) ? artifact.grid.columns : [];
+  const overviewItems = [
+    { label: "Workbook", value: analysis?.file_name ?? "n/a", tone: "neutral" as const },
+    { label: "Sheets", value: formatNumber(analysis?.sheet_count), tone: "good" as const },
+    { label: "Selected", value: selectedSheet ?? "n/a", tone: "neutral" as const },
+    { label: "Rows", value: formatNumber(sheetDetails?.row_count), tone: "good" as const },
+    { label: "Columns", value: formatNumber(sheetDetails?.column_count), tone: "neutral" as const },
+    { label: "Shape", value: artifact?.overview?.shape ?? "n/a", tone: "neutral" as const },
+  ];
+
+  return (
+    <section className="notebookPanel studioCanvasPanel">
+      <div className="notebookHeader">
+        <h2>Cohort Browser</h2>
+        <span className="pill">{analysis?.file_name ?? "spreadsheet"}</span>
+      </div>
+      <div className="studioCanvasBody">
+        <StudioMetricGrid items={overviewItems} />
+        <div className="resultActionRow" style={{ flexWrap: "wrap" }}>
+          {sheetNames.map((sheetName: string) => (
+            <button
+              key={sheetName}
+              type="button"
+              className="sourceAddButton"
+              onClick={() => setSelectedSheet(sheetName)}
+              style={selectedSheet === sheetName ? { opacity: 1, borderStyle: "solid" } : { opacity: 0.75 }}
+            >
+              {sheetName}
+            </button>
+          ))}
+        </div>
+        {artifact ? (
+          <>
+            <div className="resultSectionSplit">
+              <article className="miniCard">
+                <h3>Overview</h3>
+                <StudioSimpleList
+                  items={[
+                    { label: "Class", detail: artifact.overview?.classification ?? "n/a" },
+                    { label: "Subject id", detail: artifact.overview?.subject_id_column ?? "n/a" },
+                    { label: "Subject rows", detail: formatNumber(artifact.overview?.subject_count) },
+                    { label: "Missingness", detail: formatNumber(artifact.overview?.missing_cells) },
+                  ]}
+                />
+              </article>
+              <article className="miniCard">
+                <h3>Schema highlights</h3>
+                <StudioSimpleList
+                  items={(artifact.schema_highlights ?? []).map((item: any) => ({
+                    label: item.column ?? "column",
+                    detail: `${item.type ?? "unknown"}${item.role ? ` | ${item.role}` : ""}`,
+                  }))}
+                  emptyLabel="No schema highlights available."
+                />
+              </article>
+            </div>
+            <div className="resultSectionSplit">
+              <article className="miniCard">
+                <h3>Missingness</h3>
+                <StudioSimpleList
+                  items={(artifact.missingness ?? []).map((item: any) => ({
+                    label: item.column ?? "column",
+                    detail: `${formatNumber(item.missing)} missing (${item.percent ?? "0%"})`,
+                  }))}
+                  emptyLabel="No missingness summary available."
+                />
+              </article>
+              <article className="miniCard">
+                <h3>Subject preview</h3>
+                <StudioSimpleList
+                  items={(artifact.subjects ?? []).map((item: any) => ({
+                    label: String(item.subject_id ?? item.row ?? "row"),
+                    detail:
+                      Array.isArray(item.summary) && item.summary.length
+                        ? item.summary.join(" | ")
+                        : "No preview fields",
+                  }))}
+                  emptyLabel="No subject preview available."
+                />
+              </article>
+            </div>
+            <article className="miniCard">
+              <h3>Grid preview</h3>
+              {previewColumns.length && previewRows.length ? (
+                <StudioPreviewTable
+                  columns={previewColumns}
+                  rows={previewRows}
+                  rowHeaderLabel="Row"
+                  footer={
+                    <p className="summaryStatsGridMeta">
+                      Showing {previewRows.length} preview rows from the selected sheet.
+                    </p>
+                  }
+                />
+              ) : (
+                <p className="emptyState">No grid preview is available for this sheet.</p>
+              )}
+            </article>
+            <WarningListCard
+              warnings={Array.isArray(analysis?.warnings) ? analysis.warnings : []}
+              emptyLabel="No workbook warnings."
+            />
+          </>
+        ) : (
+          <p className="emptyState">No cohort browser artifact is available for the selected sheet.</p>
+        )}
+      </div>
+    </section>
+  );
+}
 
 export function buildCustomStudioRendererRegistry({
   apiBase,
@@ -15,6 +167,7 @@ export function buildCustomStudioRendererRegistry({
   plinkRunning,
   activeSource,
   attachedFile,
+  spreadsheetAnalysis,
   candidateVariants,
   searchedAnnotations,
   setSelectedAnnotationIndex,
@@ -46,6 +199,10 @@ export function buildCustomStudioRendererRegistry({
   const { summarizeLabel } = helpers;
 
   return {
+    cohort_browser: () =>
+      spreadsheetAnalysis ? (
+        <CohortBrowserCard analysis={spreadsheetAnalysis} components={components} helpers={helpers} />
+      ) : null,
     prs_prep: () =>
       prsPrepResultForStudio ? (
         <section className="notebookPanel studioCanvasPanel"><div className="notebookHeader"><h2>PRS Prep Review</h2></div><div className="studioCanvasBody"><div className="resultMetricGrid"><MetricTile label="Inferred build" value={prsPrepResultForStudio.build_check.inferred_build} tone="good" /><MetricTile label="Build confidence" value={prsPrepResultForStudio.build_check.build_confidence} tone="neutral" /><MetricTile label="Effect size" value={prsPrepResultForStudio.harmonization.effect_size_kind} tone="neutral" /><MetricTile label="Ready rows" value={String(prsPrepResultForStudio.kept_rows)} tone={prsPrepResultForStudio.kept_rows > 0 ? "good" : "warn"} /><MetricTile label="Dropped rows" value={String(prsPrepResultForStudio.dropped_rows)} tone="neutral" /><MetricTile label="Score file" value={prsPrepResultForStudio.score_file_ready ? "ready" : "not ready"} tone={prsPrepResultForStudio.score_file_ready ? "good" : "warn"} /></div><div className="resultSectionSplit"><article className="miniCard"><h3>Build check</h3><ul className="hintList"><li><strong>Source build</strong>: {prsPrepResultForStudio.build_check.source_build}</li><li><strong>Target build</strong>: {prsPrepResultForStudio.build_check.target_build}</li><li><strong>Build match</strong>: {prsPrepResultForStudio.build_check.build_match == null ? "undetermined" : prsPrepResultForStudio.build_check.build_match ? "yes" : "no"}</li></ul></article><article className="miniCard"><h3>Harmonization</h3><ul className="hintList"><li><strong>Required fields present</strong>: {prsPrepResultForStudio.harmonization.required_fields_present ? "yes" : "no"}</li><li><strong>Preview rows harmonizable</strong>: {prsPrepResultForStudio.harmonization.harmonizable_preview_rows}</li><li><strong>Ambiguous SNPs</strong>: {prsPrepResultForStudio.harmonization.ambiguous_snp_count}</li>{prsPrepResultForStudio.harmonization.missing_fields.length ? <li><strong>Missing fields</strong>: {prsPrepResultForStudio.harmonization.missing_fields.join(", ")}</li> : null}</ul></article></div><article className="miniCard"><h3>PLINK score-file preview</h3><p className="summaryStatsGridMeta">Columns: {prsPrepResultForStudio.score_file_columns.join(", ") || "ID, A1, BETA"}</p><div className="variantTableWrap summaryStatsTableWrap"><table className="variantTable summaryStatsTable"><thead><tr>{prsPrepResultForStudio.score_file_columns.map((column: string) => <th key={column}>{column}</th>)}</tr></thead><tbody>{prsPrepResultForStudio.score_file_preview_rows.map((row: any, index: number) => <tr key={`prs-prep-preview-${index}`}>{prsPrepResultForStudio.score_file_columns.map((column: string) => <td key={`${index}-${column}`}>{row[column] || ""}</td>)}</tr>)}</tbody></table></div><ArtifactLinksRow items={prsPrepResultForStudio.score_file_path ? [{ label: "Open output", href: `${apiBase.replace(/\/$/, "")}/api/v1/files?path=${encodeURIComponent(prsPrepResultForStudio.score_file_path)}` }] : []} /></article><WarningListCard warnings={[...prsPrepResultForStudio.build_check.warnings, ...prsPrepResultForStudio.harmonization.warnings]} /></div></section>

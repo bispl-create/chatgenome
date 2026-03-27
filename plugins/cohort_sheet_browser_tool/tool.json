@@ -1,0 +1,21 @@
+{
+  "name": "cohort_sheet_browser_tool",
+  "description": "Analyze a multi-sheet Excel workbook into cohort-browser artifacts such as sheet summaries, subject previews, schema highlights, and missingness views.",
+  "task": "cohort-browser",
+  "modality": "spreadsheet",
+  "approval_required": false,
+  "entrypoint": "plugins.cohort_sheet_browser_tool.logic:execute",
+  "direct_chat": {
+    "aliases": ["cohort-browser", "cohort_sheet_browser"],
+    "summary": "Analyze the active workbook into a cohort browser view for multi-sheet spreadsheets.",
+    "studio": {
+      "renderer": "cohort_browser"
+    }
+  },
+  "workflow_binding": {
+    "source_type": "spreadsheet",
+    "result_path": "analysis",
+    "transform": "spreadsheet_source_response",
+    "used_tools_label": "cohort_sheet_browser_tool"
+  }
+}

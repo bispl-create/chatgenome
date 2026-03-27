@@ -1,0 +1,6 @@
+{
+  "name": "spreadsheet_bootstrap",
+  "source_type": "spreadsheet",
+  "upload_subdir": "spreadsheet",
+  "runner": "spreadsheet"
+}

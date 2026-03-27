@@ -383,6 +383,33 @@ type TextChatResponse = {
   analysis?: TextSourceResponse | null;
 };
 
+type SpreadsheetSourceResponse = {
+  analysis_id: string;
+  source_spreadsheet_path?: string | null;
+  file_name: string;
+  workbook_format: string;
+  sheet_names: string[];
+  selected_sheet?: string | null;
+  sheet_count: number;
+  sheet_details: Array<Record<string, any>>;
+  studio_cards: Array<Record<string, any>>;
+  artifacts: Record<string, any>;
+  warnings: string[];
+  draft_answer: string;
+  used_tools: string[];
+  tool_registry: AnalysisResponse["tool_registry"];
+};
+
+type SpreadsheetChatResponse = {
+  answer: string;
+  citations: string[];
+  used_fallback: boolean;
+  result_kind?: string | null;
+  requested_view?: StudioView | null;
+  studio?: { renderer?: string | null } | null;
+  analysis?: SpreadsheetSourceResponse | null;
+};
+
 type RPlotResponse = {
   tool: string;
   input_path: string;
@@ -441,13 +468,13 @@ type WorkflowManifest = {
 };
 
 type SourceReadyResponse = {
-  source_type: "vcf" | "raw_qc" | "summary_stats" | "text";
+  source_type: "vcf" | "raw_qc" | "summary_stats" | "text" | "spreadsheet";
   file_name: string;
   source_path: string;
   file_kind?: string | null;
 };
 
-type SessionMode = "prs" | "vcf_analysis" | "raw_sequence" | "text_review";
+type SessionMode = "prs" | "vcf_analysis" | "raw_sequence" | "text_review" | "spreadsheet_review";
 
 type PrsPrepResponse = {
   analysis_id: string;
@@ -509,6 +536,12 @@ const DEFAULT_WORKFLOW_REGISTRY: WorkflowManifest[] = [
     source_type: "text",
     default_view: "text",
   },
+  {
+    name: "spreadsheet_review",
+    description: "Run the default cohort-style review workflow on the active spreadsheet workbook.",
+    source_type: "spreadsheet",
+    default_view: "cohort_browser",
+  },
 ];
 
 const DEFAULT_LIFTOVER_CHAIN =
@@ -529,6 +562,7 @@ type AnalysisQuestionTurn = {
 
 type StudioView =
   | "text"
+  | "cohort_browser"
   | "candidates"
   | "acmg"
   | "provenance"
@@ -629,6 +663,11 @@ function isTextFileName(fileName: string) {
     lowered.endsWith(".note") ||
     lowered.endsWith(".log")
   );
+}
+
+function isSpreadsheetFileName(fileName: string) {
+  const lowered = fileName.toLowerCase();
+  return lowered.endsWith(".xlsx") || lowered.endsWith(".xlsm");
 }
 
 function formatPercent(value: number | null | undefined) {
@@ -1189,18 +1228,19 @@ export default function Page() {
     {
       role: "assistant",
       content:
-        "Select a session mode first. `@mode prs` starts the PRS workflow and expects two inputs: summary statistics and a target genotype. `@mode vcf_analysis` starts a single-input VCF variant interpretation session. `@mode raw_sequence` starts a FASTQ/BAM/SAM raw sequencing QC session. `@mode text_review` starts a text-note review session. To see the available modes again, enter `@mode help`.",
+        "Select a session mode first. `@mode prs` starts the PRS workflow and expects two inputs: summary statistics and a target genotype. `@mode vcf_analysis` starts a single-input VCF variant interpretation session. `@mode raw_sequence` starts a FASTQ/BAM/SAM raw sequencing QC session. `@mode text_review` starts a text-note review session. `@mode spreadsheet_review` starts a multi-sheet workbook cohort review session. To see the available modes again, enter `@mode help`.",
     },
   ]);
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
   const [rawQcAnalysis, setRawQcAnalysis] = useState<RawQcResponse | null>(null);
   const [summaryStatsAnalysis, setSummaryStatsAnalysis] = useState<SummaryStatsResponse | null>(null);
+  const [spreadsheetAnalysis, setSpreadsheetAnalysis] = useState<SpreadsheetSourceResponse | null>(null);
   const [textAnalysis, setTextAnalysis] = useState<TextSourceResponse | null>(null);
   const [summaryStatsGridRows, setSummaryStatsGridRows] = useState<Array<Record<string, string>>>([]);
   const [summaryStatsHasMore, setSummaryStatsHasMore] = useState(false);
   const [summaryStatsRowsLoading, setSummaryStatsRowsLoading] = useState(false);
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
-  const [attachedSourceType, setAttachedSourceType] = useState<"vcf" | "raw_qc" | "summary_stats" | "text" | null>(null);
+  const [attachedSourceType, setAttachedSourceType] = useState<"vcf" | "raw_qc" | "summary_stats" | "text" | "spreadsheet" | null>(null);
   const [activeSource, setActiveSource] = useState<SourceReadyResponse | null>(null);
   const [sessionMode, setSessionMode] = useState<SessionMode | null>(null);
   const [pendingUploadRole, setPendingUploadRole] = useState<"default" | "prs_summary" | "prs_target">("default");
@@ -1251,6 +1291,8 @@ export default function Page() {
         ? rawQcAnalysis.tool_registry
         : summaryStatsAnalysis?.tool_registry?.length
           ? summaryStatsAnalysis.tool_registry
+        : spreadsheetAnalysis?.tool_registry?.length
+          ? spreadsheetAnalysis.tool_registry
         : textAnalysis?.tool_registry?.length
           ? textAnalysis.tool_registry
         : toolRegistry;
@@ -1265,11 +1307,13 @@ export default function Page() {
             ? "raw_qc"
             : summaryStatsAnalysis
               ? "summary_stats"
+              : spreadsheetAnalysis
+                ? "spreadsheet"
               : textAnalysis
                 ? "text"
               : attachedSourceType;
     return sourceType ? registry.filter((item) => item.source_type === sourceType) : registry;
-  }, [workflowRegistry, analysis, rawQcAnalysis, summaryStatsAnalysis, textAnalysis, attachedSourceType, sessionMode]);
+  }, [workflowRegistry, analysis, rawQcAnalysis, summaryStatsAnalysis, spreadsheetAnalysis, textAnalysis, attachedSourceType, sessionMode]);
 
   const hasAttachedSource = Boolean(attachedFile || prsSummaryFile || prsTargetFile);
 
@@ -1460,7 +1504,7 @@ export default function Page() {
     fileInputRef.current?.click();
   }
 
-  function workflowHelpText(sourceType: "vcf" | "raw_qc" | "summary_stats" | "text" | null) {
+  function workflowHelpText(sourceType: "vcf" | "raw_qc" | "summary_stats" | "text" | "spreadsheet" | null) {
     const registry = workflowRegistry.length ? workflowRegistry : DEFAULT_WORKFLOW_REGISTRY;
     const filtered = registry.filter((item) => !sourceType || item.source_type === sourceType);
     if (filtered.length === 0) {
@@ -1506,6 +1550,7 @@ export default function Page() {
       "- `@mode vcf_analysis`: variant interpretation workflow with one VCF source.",
       "- `@mode raw_sequence`: raw sequencing QC workflow with one FASTQ/BAM/SAM source.",
       "- `@mode text_review`: plain-text or markdown review workflow with one text source.",
+      "- `@mode spreadsheet_review`: multi-sheet Excel workbook review workflow with one spreadsheet source.",
     ].join("\n");
   }
 
@@ -1544,6 +1589,16 @@ export default function Page() {
         "Next steps:",
         "- Upload one `.md`, `.markdown`, `.text`, `.note`, or `.log` file",
         "- Run `@skill text_review`",
+      ].join("\n");
+    }
+    if (mode === "spreadsheet_review") {
+      return [
+        "**Spreadsheet review mode**",
+        "",
+        "This session expects one workbook source:",
+        "- Upload one `.xlsx` or `.xlsm` workbook",
+        "- Run `@skill spreadsheet_review`",
+        "- Open the Studio cohort browser card to inspect sheets, schema, subjects, and missingness",
       ].join("\n");
     }
     return [
@@ -1587,6 +1642,8 @@ export default function Page() {
     const guessedSourceType =
       isRawQcFileName(file.name)
         ? "raw_qc"
+        : isSpreadsheetFileName(file.name)
+          ? "spreadsheet"
         : isTextFileName(file.name)
           ? "text"
         : isSummaryStatsFileName(file.name) && !isVcfFileName(file.name)
@@ -1600,6 +1657,7 @@ export default function Page() {
       setDirectQqmanResult(null);
       setDirectPrsPrepResult(null);
       setLatestPrsPrepResult(null);
+      setSpreadsheetAnalysis(null);
       setTextAnalysis(null);
     } else if (sessionMode === "prs" && slotRole === "prs_target") {
       setAnalysis(null);
@@ -1607,6 +1665,7 @@ export default function Page() {
       setDirectPlinkResult(null);
       setDirectSnpeffResult(null);
       setDirectLdblockshowResult(null);
+      setSpreadsheetAnalysis(null);
       setTextAnalysis(null);
     } else if (guessedSourceType === "vcf") {
       setAnalysis(null);
@@ -1614,16 +1673,22 @@ export default function Page() {
       setDirectPlinkResult(null);
       setDirectSnpeffResult(null);
       setDirectLdblockshowResult(null);
+      setSpreadsheetAnalysis(null);
       setTextAnalysis(null);
     } else if (guessedSourceType === "raw_qc") {
       setRawQcAnalysis(null);
       setDirectSamtoolsResult(null);
+      setSpreadsheetAnalysis(null);
       setTextAnalysis(null);
     } else if (guessedSourceType === "summary_stats") {
       setSummaryStatsAnalysis(null);
       setDirectQqmanResult(null);
       setDirectPrsPrepResult(null);
       setLatestPrsPrepResult(null);
+      setSpreadsheetAnalysis(null);
+      setTextAnalysis(null);
+    } else if (guessedSourceType === "spreadsheet") {
+      setSpreadsheetAnalysis(null);
       setTextAnalysis(null);
     } else if (guessedSourceType === "text") {
       setTextAnalysis(null);
@@ -1689,6 +1754,12 @@ export default function Page() {
       addMessage({
         role: "assistant",
         content: `Text source \`${file.name}\` is loaded. Run \`@skill text_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
+      });
+    } else if (guessedSourceType === "spreadsheet") {
+      setStatus("Spreadsheet source ready");
+      addMessage({
+        role: "assistant",
+        content: `Spreadsheet source \`${file.name}\` is loaded. Run \`@skill spreadsheet_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
       });
     } else if (guessedSourceType === "summary_stats") {
       setStatus("Summary statistics source ready");
@@ -2069,6 +2140,7 @@ export default function Page() {
       const payload: RawQcResponse = await response.json();
       setRawQcAnalysis(payload);
       setAnalysis(null);
+      setSpreadsheetAnalysis(null);
       setTextAnalysis(null);
       activateStudioFromPayload({ requested_view: "rawqc" }, "rawqc");
       setStatus("Raw QC ready");
@@ -2118,6 +2190,7 @@ export default function Page() {
       setSummaryStatsAnalysis(payload);
       setAnalysis(null);
       setRawQcAnalysis(null);
+      setSpreadsheetAnalysis(null);
       setTextAnalysis(null);
       activateStudioFromPayload({ requested_view: "sumstats" }, "sumstats");
       setStatus("Summary stats ready");
@@ -2163,6 +2236,7 @@ export default function Page() {
 
       const payload: TextSourceResponse = await response.json();
       setTextAnalysis(payload);
+      setSpreadsheetAnalysis(null);
       setAnalysis(null);
       setRawQcAnalysis(null);
       setSummaryStatsAnalysis(null);
@@ -2177,6 +2251,54 @@ export default function Page() {
       addMessage({
         role: "assistant",
         content: `Text review 중 오류가 발생했습니다: ${message}`,
+      });
+      return null;
+    }
+  }
+
+  async function handleStartSpreadsheetReview(
+    file: File,
+    options?: { silent?: boolean },
+  ): Promise<SpreadsheetSourceResponse | null> {
+    const silent = options?.silent ?? false;
+    setError(null);
+    if (!silent) {
+      addMessage({
+        role: "assistant",
+        content: "Workbook을 읽고 sheet별 cohort browser artifact를 만들고 있습니다.",
+        kind: "status",
+      });
+    }
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/spreadsheet/upload`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      const payload: SpreadsheetSourceResponse = await response.json();
+      setSpreadsheetAnalysis(payload);
+      setTextAnalysis(null);
+      setAnalysis(null);
+      setRawQcAnalysis(null);
+      setSummaryStatsAnalysis(null);
+      activateStudioFromPayload(payload, "cohort_browser");
+      setStatus("Spreadsheet review ready");
+      setComposerText("");
+      return payload;
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setError(message);
+      setStatus("Spreadsheet review failed");
+      addMessage({
+        role: "assistant",
+        content: `Spreadsheet review 중 오류가 발생했습니다: ${message}`,
       });
       return null;
     }
@@ -2309,6 +2431,7 @@ export default function Page() {
 
       const payload: AnalysisResponse = await response.json();
       setAnalysis(payload);
+      setSpreadsheetAnalysis(null);
       setTextAnalysis(null);
       setFollowUpAnswer(null);
       setAnalysisQa([]);
@@ -2382,7 +2505,13 @@ export default function Page() {
       if (remainder === "text_review") {
         setSessionMode("text_review");
         setStatus("Text review mode selected");
-        addMessage({ role: "assistant", content: modeSelectionText("text_review") });
+      addMessage({ role: "assistant", content: modeSelectionText("text_review") });
+      return;
+    }
+      if (remainder === "spreadsheet_review") {
+        setSessionMode("spreadsheet_review");
+        setStatus("Spreadsheet review mode selected");
+        addMessage({ role: "assistant", content: modeSelectionText("spreadsheet_review") });
         return;
       }
       addMessage({ role: "assistant", content: `\`@mode ${remainder}\` is not available. Use \`@mode help\`.` });
@@ -2393,13 +2522,13 @@ export default function Page() {
       addMessage({ role: "user", content: text });
       addMessage({
         role: "assistant",
-        content: sessionMode ? "먼저 현재 mode에 필요한 source 파일을 업로드해 주세요." : "먼저 `@mode prs`, `@mode vcf_analysis`, `@mode raw_sequence`, 또는 `@mode text_review`를 선택한 뒤 source 파일을 업로드해 주세요.",
+        content: sessionMode ? "먼저 현재 mode에 필요한 source 파일을 업로드해 주세요." : "먼저 `@mode prs`, `@mode vcf_analysis`, `@mode raw_sequence`, `@mode text_review`, 또는 `@mode spreadsheet_review`를 선택한 뒤 source 파일을 업로드해 주세요.",
       });
       setComposerText("");
       return;
     }
 
-    if (!analysis && !rawQcAnalysis && !summaryStatsAnalysis && !textAnalysis) {
+    if (!analysis && !rawQcAnalysis && !summaryStatsAnalysis && !spreadsheetAnalysis && !textAnalysis) {
       const skillMatch = text.match(/^@skill(?:\s+(.*))?$/i);
       if (skillMatch) {
         addMessage({ role: "user", content: text });
@@ -2454,6 +2583,14 @@ export default function Page() {
             return;
           }
           await handleStartTextReview(attachedFile);
+          return;
+        }
+        if (workflowName === "spreadsheet_review" && (sessionMode === "spreadsheet_review" || attachedSourceType === "spreadsheet")) {
+          if (!attachedFile) {
+            addMessage({ role: "assistant", content: "Upload a spreadsheet source first." });
+            return;
+          }
+          await handleStartSpreadsheetReview(attachedFile);
           return;
         }
         if (workflowName === "prs_prep" && (sessionMode === "prs" || attachedSourceType === "summary_stats")) {
@@ -2518,6 +2655,8 @@ export default function Page() {
             ? "PRS mode is active. Upload the summary-statistics and target-genotype sources as needed, then use `@skill prs_prep` and `@plink score`."
             : sessionMode === "text_review"
               ? "Text review mode is active. Upload a text source and run `@skill text_review`."
+              : sessionMode === "spreadsheet_review"
+                ? "Spreadsheet review mode is active. Upload a workbook source and run `@skill spreadsheet_review`."
             : "A source is loaded, but no workflow is running yet. Use `@skill help` to see available workflows, then run one such as `@skill representative_vcf_review`.",
       });
       return;
@@ -2544,6 +2683,12 @@ export default function Page() {
     if (textAnalysis) {
       setComposerText("");
       await handleAskTextQuestion(text);
+      return;
+    }
+
+    if (spreadsheetAnalysis) {
+      setComposerText("");
+      await handleAskSpreadsheetQuestion(text);
       return;
     }
 
@@ -2883,6 +3028,48 @@ export default function Page() {
     }
   }
 
+  async function handleAskSpreadsheetQuestion(questionText?: string, analysisOverride?: SpreadsheetSourceResponse | null) {
+    const text = questionText?.trim() ?? "";
+    const activeAnalysis = analysisOverride ?? spreadsheetAnalysis;
+    if (!text || !activeAnalysis) {
+      return;
+    }
+
+    setStatus("Generating answer...");
+    setAnalysisQa((current) => [...current, { role: "user", content: text }]);
+
+    try {
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/chat/spreadsheet`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: text,
+          analysis: activeAnalysis,
+          history: analysisQa.map((turn) => ({ role: turn.role, content: turn.content })),
+          studio_context: studioContext,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload: SpreadsheetChatResponse = await response.json();
+      if (payload.analysis) {
+        setSpreadsheetAnalysis(payload.analysis);
+      }
+      activateStudioFromPayload(payload, "cohort_browser");
+      setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
+      setFollowUpAnswer(payload.answer);
+      setStatus("Answer ready");
+    } catch (caught) {
+      const msg = caught instanceof Error ? caught.message : String(caught);
+      setAnalysisQa((current) => [
+        ...current,
+        { role: "assistant", content: `설명 요청 중 오류가 발생했습니다: ${msg}` },
+      ]);
+      setStatus("Answer failed");
+    }
+  }
+
   const searchedAnnotations = useMemo(() => {
     const query = annotationSearch.trim().toLowerCase();
     if (!analysis) {
@@ -2910,11 +3097,13 @@ export default function Page() {
       ? rawQcAnalysis.draft_answer
       : summaryStatsAnalysis
         ? summaryStatsAnalysis.draft_answer
+      : spreadsheetAnalysis
+        ? spreadsheetAnalysis.draft_answer
       : textAnalysis
         ? textAnalysis.draft_answer
       : null;
   const displayedAnswer = followUpAnswer ?? summaryText;
-  const hasInteractiveState = Boolean(attachedFile || analysis || rawQcAnalysis || summaryStatsAnalysis || textAnalysis || messages.length > 1);
+  const hasInteractiveState = Boolean(attachedFile || analysis || rawQcAnalysis || summaryStatsAnalysis || spreadsheetAnalysis || textAnalysis || messages.length > 1);
   const latestStatusMessage =
     [...messages].reverse().find((message) => message.kind === "status" || message.kind === "summary")?.content ?? "";
   const sourceStatusDetail = useMemo(() => {
@@ -2935,6 +3124,12 @@ export default function Page() {
     }
     if (status === "Text review ready") {
       return "The uploaded text note has been summarized into a preview-oriented Studio review card.";
+    }
+    if (status === "Spreadsheet source ready") {
+      return "A workbook source is attached. Run the spreadsheet review workflow to build cohort-style Studio cards.";
+    }
+    if (status === "Spreadsheet review ready") {
+      return "The uploaded workbook has been converted into sheet-level cohort browser artifacts in Studio.";
     }
     if (status === "Running Liftover...") {
       return "Running GATK LiftoverVcf on the active VCF and preparing lifted and rejected variant outputs.";
@@ -2993,6 +3188,9 @@ export default function Page() {
     if (status === "Summary stats failed") {
       return "Summary statistics intake failed. Check the file format, compression, and delimiter/header structure.";
     }
+    if (status === "Spreadsheet review failed") {
+      return "Spreadsheet intake failed. Check the workbook format and whether the required parser dependency is installed.";
+    }
     if (status === "Answer failed") {
       return "The last chat response failed. Retry the question and ChatGenome will attempt the grounded explanation again.";
     }
@@ -3034,6 +3232,7 @@ export default function Page() {
     status === "Running PLINK score..." ||
     status === "Raw QC failed" ||
     status === "Summary stats failed" ||
+    status === "Spreadsheet review failed" ||
     status === "Answer failed" ||
     status === "Liftover failed" ||
     status === "qqman failed" ||
@@ -3055,10 +3254,14 @@ export default function Page() {
           ? "Analysis ready"
           : rawQcAnalysis
             ? "Raw QC ready"
-            : "Summary stats ready"
+            : summaryStatsAnalysis
+              ? "Summary stats ready"
+              : spreadsheetAnalysis
+                ? "Spreadsheet review ready"
+                : "Analysis ready"
         : status;
   const summaryTurn =
-    analysis || rawQcAnalysis || summaryStatsAnalysis
+    analysis || rawQcAnalysis || summaryStatsAnalysis || spreadsheetAnalysis
       ? [
           {
             role: "assistant" as const,
@@ -3285,6 +3488,7 @@ export default function Page() {
     analysis ||
       rawQcAnalysis ||
       summaryStatsAnalysis ||
+      spreadsheetAnalysis ||
       textAnalysis ||
       prsPrepResultForStudio ||
       qqmanResultForStudio ||
@@ -3310,6 +3514,10 @@ export default function Page() {
           ...(qqmanResultForStudio
             ? [{ id: "qqman" as StudioView, title: "qqman Plots", subtitle: "Manhattan and QQ visualization" }]
             : []),
+        ]
+    : spreadsheetAnalysis
+      ? [
+          { id: "cohort_browser" as StudioView, title: "Cohort Browser", subtitle: "Sheet-level cohort overview and grid preview" },
         ]
     : textAnalysis
       ? [
@@ -3367,6 +3575,7 @@ export default function Page() {
     analysis,
     rawQcAnalysis,
     summaryStatsAnalysis,
+    spreadsheetAnalysis,
     textAnalysis,
     prsPrepResultForStudio,
     qqmanResultForStudio,
@@ -3448,6 +3657,15 @@ export default function Page() {
     }
   }
   const studioContext = useMemo(() => {
+    if (spreadsheetAnalysis) {
+      return {
+        active_view: activeStudioView,
+        sheet_count: spreadsheetAnalysis.sheet_count,
+        selected_sheet: spreadsheetAnalysis.selected_sheet,
+        sheet_names: spreadsheetAnalysis.sheet_names,
+        sheet_details: spreadsheetAnalysis.sheet_details?.slice(0, 8),
+      };
+    }
     if (!analysis) {
       return {};
     }
@@ -3562,6 +3780,7 @@ export default function Page() {
   }, [
     activeStudioView,
     analysis,
+    spreadsheetAnalysis,
     candidateVariants,
     clinicalCoverage,
     filteringSummary,
@@ -3654,6 +3873,10 @@ export default function Page() {
                           <p>
                             {isRawQcFileName(attachedFile.name)
                               ? "Active raw sequencing source"
+                              : isSpreadsheetFileName(attachedFile.name)
+                                ? "Active spreadsheet source"
+                              : isTextFileName(attachedFile.name)
+                                ? "Active text source"
                               : isSummaryStatsFileName(attachedFile.name) && !isVcfFileName(attachedFile.name)
                                 ? "Active summary statistics source"
                                 : "Active VCF source"}
@@ -3663,7 +3886,7 @@ export default function Page() {
                       </article>
                     ) : (
                       <div className="sourceEmpty">
-                        <p>Select a session mode with `@mode prs`, `@mode vcf_analysis`, `@mode raw_sequence`, or `@mode text_review`.</p>
+                        <p>Select a session mode with `@mode prs`, `@mode vcf_analysis`, `@mode raw_sequence`, `@mode text_review`, or `@mode spreadsheet_review`.</p>
                       </div>
                     )}
                   </div>
@@ -3767,7 +3990,7 @@ export default function Page() {
               ) : (
                 <div className="chatEmptyState">
                   <h3>Select a mode first</h3>
-                  <p>Use <code>@mode prs</code>, <code>@mode vcf_analysis</code>, <code>@mode raw_sequence</code>, or <code>@mode text_review</code>, then upload the required source files on the left.</p>
+                  <p>Use <code>@mode prs</code>, <code>@mode vcf_analysis</code>, <code>@mode raw_sequence</code>, <code>@mode text_review</code>, or <code>@mode spreadsheet_review</code>, then upload the required source files on the left.</p>
                 </div>
               )}
             </div>
@@ -3783,8 +4006,8 @@ export default function Page() {
                   hasAttachedSource
                     ? "Start typing a follow-up question..."
                     : sessionMode
-                      ? "Upload the required source files for the selected mode"
-                      : "Use @mode prs, @mode vcf_analysis, @mode raw_sequence, or @mode text_review first"
+                    ? "Upload the required source files for the selected mode"
+                      : "Use @mode prs, @mode vcf_analysis, @mode raw_sequence, @mode text_review, or @mode spreadsheet_review first"
                 }
                 onKeyDown={(event) => {
                   if (isComposing || event.nativeEvent.isComposing) {

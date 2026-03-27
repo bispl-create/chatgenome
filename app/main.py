@@ -33,6 +33,9 @@ from app.models import (
     RawQcResponse,
     RPlotRequest,
     RPlotResponse,
+    SpreadsheetChatRequest,
+    SpreadsheetChatResponse,
+    SpreadsheetSourceResponse,
     SnpEffRequest,
     SnpEffResponse,
     SamtoolsRequest,
@@ -54,7 +57,7 @@ from app.models import (
     WorkflowReplyRequest,
     WorkflowStartRequest,
 )
-from app.services.chat import answer_analysis_chat, answer_raw_qc_chat, answer_summary_stats_chat, answer_text_chat
+from app.services.chat import answer_analysis_chat, answer_raw_qc_chat, answer_spreadsheet_chat, answer_summary_stats_chat, answer_text_chat
 from app.services.jobs import create_job, get_job, run_job
 from app.services.source_bootstrap import (
     UPLOAD_ROOT,
@@ -255,7 +258,7 @@ def _resolve_source_upload(filename: str, expected_source_type: str | None = Non
             raise HTTPException(status_code=400, detail=detail or "Unsupported upload type.")
         raise HTTPException(
             status_code=400,
-            detail="Unsupported source type. Upload a VCF, raw sequencing file, summary statistics file, or registered text note.",
+            detail="Unsupported source type. Upload a VCF, raw sequencing file, summary statistics file, spreadsheet workbook, or registered text note.",
         )
     source_type, _, _ = detected
     if expected_source_type is not None and source_type != expected_source_type:
@@ -269,7 +272,7 @@ def _run_source_bootstrap(
     durable_path: Path,
     file_name: str,
     **kwargs: object,
-) -> AnalysisResponse | RawQcResponse | SummaryStatsResponse | TextSourceResponse:
+) -> AnalysisResponse | RawQcResponse | SpreadsheetSourceResponse | SummaryStatsResponse | TextSourceResponse:
     bootstrap_source_type = source_bootstrap_type(source_type)
     if load_bootstrap_manifest(bootstrap_source_type) is None:
         raise HTTPException(status_code=500, detail=f"The {source_type} bootstrap manifest is not available.")
@@ -285,6 +288,7 @@ def _run_source_bootstrap(
             "vcf": "Analysis",
             "raw_qc": "Raw-QC intake",
             "summary_stats": "Summary statistics intake",
+            "spreadsheet": "Spreadsheet intake",
             "text": "Text intake",
         }.get(source_type, "Bootstrap analysis")
         raise HTTPException(status_code=400, detail=f"{label} failed: {exc}") from exc
@@ -295,7 +299,7 @@ def _persist_and_bootstrap_upload(
     file_name: str,
     data: bytes,
     **kwargs: object,
-) -> AnalysisResponse | RawQcResponse | SummaryStatsResponse:
+) -> AnalysisResponse | RawQcResponse | SpreadsheetSourceResponse | SummaryStatsResponse | TextSourceResponse:
     bootstrap_source_type = source_bootstrap_type(source_type)
     durable_path = persist_uploaded_source_bytes(bootstrap_source_type, file_name, data)
     return _run_source_bootstrap(source_type, durable_path, file_name, **kwargs)
@@ -403,7 +407,7 @@ def _resolve_source_path_request(request: SourceFromPathRequest) -> tuple[str, P
 
 def _analyze_registered_source_path(
     request: SourceFromPathRequest,
-) -> AnalysisResponse | RawQcResponse | SummaryStatsResponse | TextSourceResponse:
+) -> AnalysisResponse | RawQcResponse | SpreadsheetSourceResponse | SummaryStatsResponse | TextSourceResponse:
     source_type, source_path, file_name = _resolve_source_path_request(request)
     return _run_source_bootstrap(
         source_type,
@@ -520,11 +524,11 @@ def analyze_from_path_async(request: FromPathRequest) -> AnalysisJobResponse:
 
 @app.post(
     "/api/v1/source/from-path",
-    response_model=Union[AnalysisResponse, RawQcResponse, SummaryStatsResponse, TextSourceResponse],
+    response_model=Union[AnalysisResponse, RawQcResponse, SpreadsheetSourceResponse, SummaryStatsResponse, TextSourceResponse],
 )
 def analyze_registered_source_from_path(
     request: SourceFromPathRequest,
-) -> AnalysisResponse | RawQcResponse | SummaryStatsResponse | TextSourceResponse:
+) -> AnalysisResponse | RawQcResponse | SpreadsheetSourceResponse | SummaryStatsResponse | TextSourceResponse:
     try:
         return _analyze_registered_source_path(request)
     except FileNotFoundError as exc:
@@ -576,6 +580,11 @@ def chat_about_summary_stats(request: SummaryStatsChatRequest) -> SummaryStatsCh
 @app.post("/api/v1/chat/text", response_model=TextChatResponse)
 def chat_about_text(request: TextChatRequest) -> TextChatResponse:
     return answer_text_chat(request)
+
+
+@app.post("/api/v1/chat/spreadsheet", response_model=SpreadsheetChatResponse)
+def chat_about_spreadsheet(request: SpreadsheetChatRequest) -> SpreadsheetChatResponse:
+    return answer_spreadsheet_chat(request)
 
 
 @app.post("/api/v1/workflow/start", response_model=WorkflowAgentResponse)
@@ -695,6 +704,18 @@ async def analyze_text_upload(file: UploadFile = File(...)) -> TextSourceRespons
         await file.read(),
         TextSourceResponse,
         "Unexpected bootstrap response type for text upload.",
+    )
+
+
+@app.post("/api/v1/spreadsheet/upload", response_model=SpreadsheetSourceResponse)
+async def analyze_spreadsheet_upload(file: UploadFile = File(...)) -> SpreadsheetSourceResponse:
+    filename = file.filename or "workbook.xlsx"
+    return _typed_bootstrap_upload(
+        "spreadsheet",
+        filename,
+        await file.read(),
+        SpreadsheetSourceResponse,
+        "Unexpected bootstrap response type for spreadsheet upload.",
     )
 
 

@@ -9,6 +9,7 @@ export type StudioRendererBuilderArgs = {
   analysis: any;
   rawQcAnalysis: any;
   summaryStatsAnalysis: any;
+  spreadsheetAnalysis: any;
   textAnalysis: any;
   prsPrepResultForStudio: any;
   qqmanResultForStudio: any;

@@ -14,6 +14,7 @@ export type StudioRendererDispatch = {
 const STUDIO_RENDERER_METADATA: Record<string, { requestedViews?: string[]; resultKinds?: string[] }> = {
   rawqc: { requestedViews: ["rawqc"] },
   text: { requestedViews: ["text"] },
+  cohort_browser: { requestedViews: ["cohort_browser"] },
   sumstats: { requestedViews: ["sumstats"] },
   samtools: { requestedViews: ["samtools"], resultKinds: ["samtools_result"] },
   prs_prep: { requestedViews: ["prs_prep"], resultKinds: ["prs_prep_result"] },

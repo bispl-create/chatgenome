@@ -8,6 +8,7 @@ from app.models import (
     AnalysisResponse,
     PrsPrepResponse,
     RawQcResponse,
+    SpreadsheetSourceResponse,
     SummaryStatsResponse,
     TextSourceResponse,
 )
@@ -149,6 +150,17 @@ def workflow_answer_tokens(
         )
         return tokens
 
+    if source_type == "spreadsheet" and isinstance(analysis, SpreadsheetSourceResponse):
+        tokens.update(
+            {
+                "active_file": analysis.file_name,
+                "logged_tools": _stringify_logged_tools(getattr(analysis, "used_tools", []) or []),
+                "sheet_count": analysis.sheet_count,
+                "selected_sheet": analysis.selected_sheet or "",
+            }
+        )
+        return tokens
+
     return tokens
 
 
@@ -225,6 +237,21 @@ def build_text_workflow_result(
     refreshed: TextSourceResponse = context["analysis"]
     requested_view = str(manifest.get("requested_view") or "text")
     answer = format_workflow_answer(manifest, "text", refreshed, context)
+    return {
+        "answer": answer,
+        "analysis": refreshed,
+        "requested_view": requested_view,
+        "studio": workflow_studio_metadata(manifest),
+    }
+
+
+def build_spreadsheet_workflow_result(
+    manifest: dict[str, object],
+    context: dict[str, Any],
+) -> dict[str, object]:
+    refreshed: SpreadsheetSourceResponse = context["analysis"]
+    requested_view = str(manifest.get("requested_view") or "cohort_browser")
+    answer = format_workflow_answer(manifest, "spreadsheet", refreshed, context)
     return {
         "answer": answer,
         "analysis": refreshed,

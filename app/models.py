@@ -397,6 +397,40 @@ class TextChatResponse(BaseModel):
     analysis: Optional[TextSourceResponse] = None
 
 
+class SpreadsheetSourceResponse(BaseModel):
+    analysis_id: str
+    source_spreadsheet_path: Optional[str] = None
+    file_name: str
+    workbook_format: str = "xlsx"
+    sheet_names: list[str] = []
+    selected_sheet: Optional[str] = None
+    sheet_count: int = 0
+    sheet_details: list[dict[str, Any]] = []
+    studio_cards: list[dict[str, Any]] = []
+    artifacts: dict[str, dict[str, Any]] = {}
+    warnings: list[str] = []
+    draft_answer: str
+    used_tools: list[str] = []
+    tool_registry: list[ToolInfo] = []
+
+
+class SpreadsheetChatRequest(BaseModel):
+    question: str
+    analysis: SpreadsheetSourceResponse
+    history: list[ChatTurn] = []
+    studio_context: dict[str, Any] = {}
+
+
+class SpreadsheetChatResponse(BaseModel):
+    answer: str
+    citations: list[str]
+    used_fallback: bool
+    result_kind: Optional[str] = None
+    requested_view: Optional[str] = None
+    studio: Optional[dict[str, Any]] = None
+    analysis: Optional[SpreadsheetSourceResponse] = None
+
+
 class PrsPrepBuildCheck(BaseModel):
     inferred_build: str = "unknown"
     build_confidence: str = "low"
@@ -455,7 +489,7 @@ class WorkflowAgentResponse(BaseModel):
 
 
 class SourceReadyResponse(BaseModel):
-    source_type: Literal["vcf", "raw_qc", "summary_stats", "text"]
+    source_type: Literal["vcf", "raw_qc", "summary_stats", "text", "spreadsheet"]
     file_name: str
     source_path: str
     file_kind: Optional[str] = None

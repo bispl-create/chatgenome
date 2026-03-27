@@ -5,6 +5,22 @@ from pathlib import Path
 
 
 SOURCE_REGISTRY: dict[str, dict[str, object]] = {
+    "spreadsheet": {
+        "upload_label": "spreadsheet workbook",
+        "dedicated_upload_detail": "Only Excel workbook uploads such as .xlsx and .xlsm are supported.",
+        "bootstrap_source_type": "spreadsheet",
+        "chat_response_kind": "spreadsheet",
+        "workflow_names": ["spreadsheet_review"],
+        "capabilities": ["source_upload", "bootstrap_analysis", "workflow", "grounded_chat"],
+        "suffixes": [
+            ".xlsx",
+            ".xlsm",
+        ],
+        "file_kind_map": {
+            ".xlsx": "XLSX",
+            ".xlsm": "XLSM",
+        },
+    },
     "text": {
         "upload_label": "text note",
         "dedicated_upload_detail": "Only Markdown and plain-text note uploads such as .md, .markdown, .text, .note, and .log are supported.",

@@ -12,6 +12,7 @@ from app.models import (
     RohSegment,
     SnpEffResponse,
     SummaryStatsResponse,
+    SpreadsheetSourceResponse,
     SymbolicAltSummary,
     TextSourceResponse,
     VariantAnnotation,
@@ -40,6 +41,8 @@ def transform_bound_value(transform: str, value: Any) -> Any:
         return SnpEffResponse(**dict(value or {}))
     if normalized == "summary_stats_response":
         return SummaryStatsResponse(**dict(value or {}))
+    if normalized == "spreadsheet_source_response":
+        return SpreadsheetSourceResponse(**dict(value or {}))
     if normalized == "prs_prep_response":
         return PrsPrepResponse(**dict(value or {}))
     if normalized == "raw_qc_response":
