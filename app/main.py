@@ -64,7 +64,12 @@ from app.services.source_bootstrap import (
     persist_uploaded_source_bytes,
     run_bootstrap_analysis,
 )
-from app.services.source_registry import detect_source_registration, infer_source_file_kind
+from app.services.source_registry import (
+    detect_source_registration,
+    infer_source_file_kind,
+    source_bootstrap_type,
+    source_upload_detail,
+)
 from app.services.tool_runner import discover_tools
 from app.services.workflow_agent import interpret_workflow_reply, start_workflow
 from app.services.workflows import (
@@ -459,14 +464,15 @@ async def analyze_upload(
     original_name = file.filename or "upload.vcf"
     detected = detect_source_registration(original_name)
     if detected is None or detected[0] != "vcf":
-        raise HTTPException(status_code=400, detail="Only .vcf and .vcf.gz uploads are supported.")
-    if load_bootstrap_manifest("vcf") is None:
+        raise HTTPException(status_code=400, detail=source_upload_detail("vcf") or "Only .vcf and .vcf.gz uploads are supported.")
+    bootstrap_source_type = source_bootstrap_type("vcf")
+    if load_bootstrap_manifest(bootstrap_source_type) is None:
         raise HTTPException(status_code=500, detail="The VCF bootstrap manifest is not available.")
-    durable_path = persist_uploaded_source_bytes("vcf", original_name, await file.read())
+    durable_path = persist_uploaded_source_bytes(bootstrap_source_type, original_name, await file.read())
 
     try:
         return run_bootstrap_analysis(
-            "vcf",
+            bootstrap_source_type,
             str(durable_path),
             original_name,
             annotation_scope=annotation_scope,
@@ -481,14 +487,12 @@ async def analyze_raw_qc_upload(file: UploadFile = File(...)) -> RawQcResponse:
     filename = file.filename or "upload.fastq.gz"
     detected = detect_source_registration(filename)
     if detected is None or detected[0] != "raw_qc":
-        raise HTTPException(
-            status_code=400,
-            detail="Only FASTQ, FASTQ.gz, FQ, FQ.gz, BAM, and SAM uploads are supported.",
-        )
-    if load_bootstrap_manifest("raw_qc") is None:
+        raise HTTPException(status_code=400, detail=source_upload_detail("raw_qc") or "Only FASTQ, FASTQ.gz, FQ, FQ.gz, BAM, and SAM uploads are supported.")
+    bootstrap_source_type = source_bootstrap_type("raw_qc")
+    if load_bootstrap_manifest(bootstrap_source_type) is None:
         raise HTTPException(status_code=500, detail="The raw-QC bootstrap manifest is not available.")
-    durable_path = persist_uploaded_source_bytes("raw_qc", filename, await file.read())
-    return run_bootstrap_analysis("raw_qc", str(durable_path), filename)
+    durable_path = persist_uploaded_source_bytes(bootstrap_source_type, filename, await file.read())
+    return run_bootstrap_analysis(bootstrap_source_type, str(durable_path), filename)
 
 
 @app.post("/api/v1/summary-stats/upload", response_model=SummaryStatsResponse)
@@ -500,16 +504,14 @@ async def analyze_summary_stats_upload(
     filename = file.filename or "summary_stats.tsv.gz"
     detected = detect_source_registration(filename)
     if detected is None or detected[0] != "summary_stats":
-        raise HTTPException(
-            status_code=400,
-            detail="Only TSV/TXT/CSV summary statistics uploads are supported.",
-        )
-    if load_bootstrap_manifest("summary_stats") is None:
+        raise HTTPException(status_code=400, detail=source_upload_detail("summary_stats") or "Only TSV/TXT/CSV summary statistics uploads are supported.")
+    bootstrap_source_type = source_bootstrap_type("summary_stats")
+    if load_bootstrap_manifest(bootstrap_source_type) is None:
         raise HTTPException(status_code=500, detail="The summary-statistics bootstrap manifest is not available.")
-    durable_path = persist_uploaded_source_bytes("summary_stats", filename, await file.read())
+    durable_path = persist_uploaded_source_bytes(bootstrap_source_type, filename, await file.read())
     try:
         return run_bootstrap_analysis(
-            "summary_stats",
+            bootstrap_source_type,
             str(durable_path),
             filename,
             genome_build=genome_build,
@@ -529,7 +531,8 @@ async def upload_active_source(file: UploadFile = File(...)) -> SourceReadyRespo
             detail="Unsupported source type. Upload a VCF, raw sequencing file, or summary statistics file.",
         )
     source_type, _, matched_suffix = detected
-    durable_path = persist_uploaded_source_bytes(source_type, filename, await file.read())
+    bootstrap_source_type = source_bootstrap_type(source_type)
+    durable_path = persist_uploaded_source_bytes(bootstrap_source_type, filename, await file.read())
     response_payload: dict[str, object] = {
         "source_type": source_type,
         "file_name": filename,

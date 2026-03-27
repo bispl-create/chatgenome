@@ -7,6 +7,11 @@ from pathlib import Path
 SOURCE_REGISTRY: dict[str, dict[str, object]] = {
     "raw_qc": {
         "upload_label": "raw sequencing file",
+        "dedicated_upload_detail": "Only FASTQ, FASTQ.gz, FQ, FQ.gz, BAM, and SAM uploads are supported.",
+        "bootstrap_source_type": "raw_qc",
+        "chat_response_kind": "raw_qc",
+        "workflow_names": ["raw_qc_review"],
+        "capabilities": ["source_upload", "bootstrap_analysis", "direct_tool", "workflow"],
         "suffixes": [
             ".fastq.gz",
             ".fq.gz",
@@ -26,6 +31,11 @@ SOURCE_REGISTRY: dict[str, dict[str, object]] = {
     },
     "summary_stats": {
         "upload_label": "summary statistics file",
+        "dedicated_upload_detail": "Only TSV/TXT/CSV summary statistics uploads are supported.",
+        "bootstrap_source_type": "summary_stats",
+        "chat_response_kind": "summary_stats",
+        "workflow_names": ["summary_stats_review", "prs_prep"],
+        "capabilities": ["source_upload", "bootstrap_analysis", "direct_tool", "workflow"],
         "suffixes": [
             ".sumstats.gz",
             ".tsv.gz",
@@ -39,6 +49,11 @@ SOURCE_REGISTRY: dict[str, dict[str, object]] = {
     },
     "vcf": {
         "upload_label": "VCF file",
+        "dedicated_upload_detail": "Only .vcf and .vcf.gz uploads are supported.",
+        "bootstrap_source_type": "vcf",
+        "chat_response_kind": "analysis",
+        "workflow_names": ["representative_vcf_review"],
+        "capabilities": ["source_upload", "bootstrap_analysis", "direct_tool", "workflow"],
         "suffixes": [
             ".vcf.gz",
             ".vcf",
@@ -94,3 +109,41 @@ def infer_source_file_kind(file_name: str, source_type: str, matched_suffix: str
         simple = Path(file_name).suffix.lower().lstrip(".")
         return simple.upper() if simple else "RAW"
     return None
+
+
+def source_upload_detail(source_type: str) -> str | None:
+    registration = load_source_registration(source_type)
+    if registration is None:
+        return None
+    detail = registration.get("dedicated_upload_detail")
+    return str(detail).strip() if isinstance(detail, str) and str(detail).strip() else None
+
+
+def source_bootstrap_type(source_type: str) -> str:
+    registration = load_source_registration(source_type)
+    if registration is None:
+        return source_type
+    bootstrap_source_type = registration.get("bootstrap_source_type")
+    if isinstance(bootstrap_source_type, str) and bootstrap_source_type.strip():
+        return bootstrap_source_type.strip().lower()
+    return source_type
+
+
+def source_workflow_names(source_type: str) -> tuple[str, ...]:
+    registration = load_source_registration(source_type)
+    if registration is None:
+        return ()
+    names = registration.get("workflow_names") or []
+    if not isinstance(names, list):
+        return ()
+    return tuple(str(name).strip() for name in names if str(name).strip())
+
+
+def source_capabilities(source_type: str) -> tuple[str, ...]:
+    registration = load_source_registration(source_type)
+    if registration is None:
+        return ()
+    capabilities = registration.get("capabilities") or []
+    if not isinstance(capabilities, list):
+        return ()
+    return tuple(str(item).strip() for item in capabilities if str(item).strip())

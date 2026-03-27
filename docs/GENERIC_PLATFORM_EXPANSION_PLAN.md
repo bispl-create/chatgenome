@@ -420,9 +420,14 @@ Partially completed on branch `codex/generic_tool`:
   - `vcf`
   - `raw_qc`
   - `summary_stats`
+- registry entries now also carry:
+  - bootstrap source mapping
+  - upload validation detail
+  - workflow capability metadata
 - upload endpoints in `main.py` now classify files through the source registry instead of
   hard-coded filename helpers
 - source uploads now derive `source_type` and optional `file_kind` from registry metadata
+- dedicated upload endpoints now also resolve bootstrap source types through registry metadata
 
 Remaining work for later stages:
 
