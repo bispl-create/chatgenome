@@ -16,7 +16,6 @@ from app.models import (
     RawQcResponse,
     RankedCandidate,
     RohSegment,
-    SnpEffResponse,
     SummaryStatsResponse,
     SymbolicAltSummary,
     ToolInfo,
@@ -33,11 +32,24 @@ from app.services.summary_stats import analyze_summary_stats
 from app.services.tool_runner import discover_tools, run_tool
 from app.services.variant_annotation import annotate_variants
 from app.services.vcf_summary import summarize_vcf
+from app.services.workflow_fallbacks import compute_vcf_fallback_value
+from app.services.workflow_hooks import (
+    annotation_key,
+    apply_vcf_postprocess_hook,
+    apply_vcf_preprocess_hook,
+    snpeff_genome_from_build,
+)
+from app.services.workflow_transforms import transform_bound_value
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 PLUGINS_DIR = ROOT_DIR / "plugins"
 WORKFLOWS_DIR = ROOT_DIR / "skills" / "chatgenome-orchestrator" / "workflows"
+
+
+class _SafeFormatDict(dict[str, object]):
+    def __missing__(self, key: str) -> str:
+        return ""
 
 
 def _normalize_workflow_step(step: object, workflow_name: str) -> dict[str, object]:
@@ -163,17 +175,6 @@ def _workflow_binding_for_tool(tool_name: str, source_type: str | None = None) -
     return binding
 
 
-def snpeff_genome_from_build(genome_build_guess: str | None) -> str:
-    value = (genome_build_guess or "").lower()
-    if any(token in value for token in ("38", "hg38", "grch38")):
-        return "GRCh38.99"
-    return "GRCh37.75"
-
-
-def annotation_key(item: VariantAnnotation) -> tuple[str, int, str, tuple[str, ...]]:
-    return (item.contig, item.pos_1based, item.ref, tuple(item.alts))
-
-
 def _serialize_binding_input(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return value.model_dump()
@@ -218,198 +219,6 @@ def _extract_tool_result_value(result: dict[str, Any], binding: dict[str, Any]) 
     return result.get(result_path)
 
 
-def _apply_vcf_preprocess_hook(hook_name: str, context: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    normalized = hook_name.strip().lower()
-    if normalized == "vcf_prepare_snpeff_payload":
-        prepared = dict(payload)
-        genome_build_guess = str(prepared.pop("genome_build_guess", "") or "")
-        prepared["genome"] = snpeff_genome_from_build(genome_build_guess)
-        prepared["output_prefix"] = f"{Path(str(context['source_vcf_path'])).stem}.aux"
-        prepared["parse_limit"] = 10
-        return prepared
-    if normalized == "vcf_shortlist_annotations":
-        prepared = dict(payload)
-        prepared["annotations"] = [item.model_dump() for item in _vcf_context_shortlisted_annotations(context)]
-        return prepared
-    if normalized == "vcf_prepare_grounded_summary_inputs":
-        facts: AnalysisFacts = context["facts"]
-        annotations = list(context["annotations"])
-        references = build_reference_bundle(facts, annotations[: min(len(annotations), 20)])
-        recommendations = build_recommendations(facts)
-        ui_cards = build_ui_cards(facts, annotations)
-        context["references"] = references
-        context["recommendations"] = recommendations
-        context["ui_cards"] = ui_cards
-
-        prepared = dict(payload)
-        prepared["references"] = [item.model_dump() for item in references]
-        prepared["recommendations"] = [item.model_dump() for item in recommendations]
-        return prepared
-    raise NotImplementedError(f"Unsupported VCF workflow preprocess hook: {hook_name}")
-
-
-def _apply_vcf_postprocess_hook(
-    hook_name: str,
-    context: dict[str, Any],
-    result: dict[str, Any],
-    transformed_value: Any,
-) -> tuple[Any, bool]:
-    normalized = hook_name.strip().lower()
-    if normalized == "vcf_merge_lookup_annotations":
-        annotations = list(context["annotations"])
-        enriched_annotations = list(transformed_value or [])
-        enriched_by_key = {annotation_key(item): item for item in enriched_annotations}
-        merged_annotations = [enriched_by_key.get(annotation_key(item), item) for item in annotations]
-        return merged_annotations, bool(result.get("lookup_performed"))
-    raise NotImplementedError(f"Unsupported VCF workflow postprocess hook: {hook_name}")
-
-
-def _transform_bound_value(transform: str, value: Any) -> Any:
-    normalized = transform.strip().lower()
-    if normalized in {"", "identity"}:
-        return value
-    if normalized == "analysis_facts":
-        return AnalysisFacts(**dict(value or {}))
-    if normalized == "variant_annotation_list":
-        return [VariantAnnotation(**item) for item in list(value or [])]
-    if normalized == "roh_segment_list":
-        return [RohSegment(**item) for item in list(value or [])]
-    if normalized == "ranked_candidate_list":
-        return [RankedCandidate(**item) for item in list(value or [])]
-    if normalized == "count_summary_list":
-        return [CountSummaryItem(**item) for item in list(value or [])]
-    if normalized == "detailed_count_summary_list":
-        return [DetailedCountSummaryItem(**item) for item in list(value or [])]
-    if normalized == "symbolic_alt_summary":
-        return SymbolicAltSummary(**dict(value or {}))
-    if normalized == "snpeff_response":
-        return SnpEffResponse(**dict(value or {}))
-    raise NotImplementedError(f"Unsupported workflow binding transform: {transform}")
-
-
-def _compute_vcf_fallback_value(transform: str, context: dict[str, Any]) -> Any:
-    normalized = transform.strip().lower()
-    if normalized == "vcf_qc_summary":
-        return summarize_vcf(str(context["source_vcf_path"]), max_examples=context["max_examples"])
-    if normalized == "annotation_local":
-        return annotate_variants(
-            str(context["source_vcf_path"]),
-            context["facts"],
-            scope=context["annotation_scope"],
-            limit=context["annotation_limit"],
-        )
-    if normalized == "roh_local":
-        return run_roh_analysis(str(context["source_vcf_path"]))
-    if normalized == "candidate_ranking_local":
-        return build_ranked_candidates(context["annotations"], context["roh_segments"], limit=8)
-    if normalized == "clinvar_summary_local":
-        counts: dict[str, int] = {}
-        for item in context["annotations"]:
-            key = (
-                item.clinical_significance.strip()
-                if item.clinical_significance and item.clinical_significance != "."
-                else "Unreviewed"
-            )
-            counts[key] = counts.get(key, 0) + 1
-        return [
-            CountSummaryItem(label=label, count=count)
-            for label, count in sorted(counts.items(), key=lambda part: part[1], reverse=True)
-        ]
-    if normalized == "vep_consequence_local":
-        counts: dict[str, int] = {}
-        for item in context["annotations"]:
-            key = item.consequence.strip() if item.consequence and item.consequence != "." else "Unclassified"
-            counts[key] = counts.get(key, 0) + 1
-        return [
-            CountSummaryItem(label=label, count=count)
-            for label, count in sorted(counts.items(), key=lambda part: part[1], reverse=True)[:10]
-        ]
-    if normalized == "clinical_coverage_local":
-        annotations = list(context["annotations"])
-        total = len(annotations)
-
-        def detail(label: str, count: int) -> DetailedCountSummaryItem:
-            percent = round((count / total) * 100) if total else 0
-            return DetailedCountSummaryItem(label=label, count=count, detail=f"{count}/{total} annotated ({percent}%)")
-
-        return [
-            detail(
-                "ClinVar coverage",
-                sum(
-                    1
-                    for item in annotations
-                    if (item.clinical_significance and item.clinical_significance != ".")
-                    or (item.clinvar_conditions and item.clinvar_conditions != ".")
-                ),
-            ),
-            detail("gnomAD coverage", sum(1 for item in annotations if item.gnomad_af and item.gnomad_af != ".")),
-            detail("Gene mapping", sum(1 for item in annotations if item.gene and item.gene != ".")),
-            detail(
-                "HGVS coverage",
-                sum(
-                    1
-                    for item in annotations
-                    if (item.hgvsc and item.hgvsc != ".") or (item.hgvsp and item.hgvsp != ".")
-                ),
-            ),
-            detail("Protein change", sum(1 for item in annotations if item.hgvsp and item.hgvsp != ".")),
-        ]
-    if normalized == "filtering_view_local":
-        annotations = list(context["annotations"])
-        unique_genes = {item.gene.strip() for item in annotations if item.gene and item.gene.strip() not in {"", "."}}
-        clinvar_labeled = sum(1 for item in annotations if item.clinical_significance and item.clinical_significance != ".")
-        symbolic = sum(1 for item in annotations if any(alt.startswith("<") and alt.endswith(">") for alt in item.alts))
-        return [
-            DetailedCountSummaryItem(
-                label="Annotated rows", count=len(annotations), detail=f"{len(annotations)} rows currently available in the triage table"
-            ),
-            DetailedCountSummaryItem(
-                label="Distinct genes", count=len(unique_genes), detail=f"{len(unique_genes)} genes represented in the annotated subset"
-            ),
-            DetailedCountSummaryItem(
-                label="ClinVar-labeled rows",
-                count=clinvar_labeled,
-                detail=f"{clinvar_labeled} rows contain a ClinVar-style significance label",
-            ),
-            DetailedCountSummaryItem(
-                label="Symbolic ALT rows",
-                count=symbolic,
-                detail=f"{symbolic} rows are symbolic ALT records that may need separate handling",
-            ),
-        ]
-    if normalized == "symbolic_alt_local":
-        symbolic_items = [item for item in context["annotations"] if any(alt.startswith("<") and alt.endswith(">") for alt in item.alts)]
-        return SymbolicAltSummary(
-            count=len(symbolic_items),
-            examples=[
-                {
-                    "locus": f"{item.contig}:{item.pos_1based}",
-                    "gene": item.gene or "",
-                    "alts": item.alts,
-                    "consequence": item.consequence or "",
-                    "genotype": item.genotype or "",
-                }
-                for item in symbolic_items[:5]
-            ],
-        )
-    if normalized == "grounded_summary_local":
-        facts: AnalysisFacts = context["facts"]
-        annotations = list(context["annotations"])
-        references = build_reference_bundle(facts, annotations[: min(len(annotations), 20)])
-        recommendations = build_recommendations(facts)
-        ui_cards = build_ui_cards(facts, annotations)
-        context["references"] = references
-        context["recommendations"] = recommendations
-        context["ui_cards"] = ui_cards
-        return build_draft_answer(
-            facts,
-            annotations,
-            [item.id for item in references],
-            [item.id for item in recommendations],
-        )
-    raise NotImplementedError(f"Unsupported VCF fallback transform: {transform}")
-
-
 def _execute_generic_vcf_bound_tool(tool_name: str, context: dict[str, Any], bind_name: str) -> None:
     binding = _workflow_binding_for_tool(tool_name, source_type="vcf")
     if binding is None:
@@ -417,14 +226,14 @@ def _execute_generic_vcf_bound_tool(tool_name: str, context: dict[str, Any], bin
     payload = _build_tool_payload_from_binding(binding, context)
     preprocess_hook = str(binding.get("preprocess") or "").strip()
     if preprocess_hook:
-        payload = _apply_vcf_preprocess_hook(preprocess_hook, context, payload)
+        payload = apply_vcf_preprocess_hook(preprocess_hook, context, payload)
     result = run_tool(tool_name, payload)
     value = _extract_tool_result_value(result, binding)
-    transformed_value = _transform_bound_value(str(binding.get("transform") or "identity"), value)
+    transformed_value = transform_bound_value(str(binding.get("transform") or "identity"), value)
     append_used_tool = True
     postprocess_hook = str(binding.get("postprocess") or "").strip()
     if postprocess_hook:
-        transformed_value, append_used_tool = _apply_vcf_postprocess_hook(
+        transformed_value, append_used_tool = apply_vcf_postprocess_hook(
             postprocess_hook,
             context,
             result,
@@ -443,15 +252,8 @@ def _apply_generic_vcf_fallback(tool_name: str, context: dict[str, Any], bind_na
     fallback_transform = str(binding.get("fallback_transform") or "").strip()
     if not fallback_transform:
         return False
-    context[bind_name] = _compute_vcf_fallback_value(fallback_transform, context)
+    context[bind_name] = compute_vcf_fallback_value(fallback_transform, context)
     return True
-
-
-def _vcf_context_shortlisted_annotations(context: dict[str, Any]) -> list[VariantAnnotation]:
-    annotations = list(context.get("annotations") or [])
-    roh_segments = list(context.get("roh_segments") or [])
-    preliminary_candidates = build_ranked_candidates(annotations, roh_segments, limit=24)
-    return [entry.item for entry in preliminary_candidates]
 
 
 def _vcf_workflow_context(
@@ -770,6 +572,95 @@ def _assemble_analysis_response_from_vcf_context(context: dict[str, Any]) -> Ana
     )
 
 
+def _stringify_logged_tools(value: Any) -> str:
+    items = [str(item).strip() for item in list(value or []) if str(item).strip()]
+    return ", ".join(items) if items else "none"
+
+
+def _workflow_answer_tokens(
+    source_type: str,
+    workflow_name: str,
+    requested_view: str,
+    analysis: object,
+    context: dict[str, Any],
+) -> dict[str, object]:
+    tokens: dict[str, object] = {
+        "workflow_name": workflow_name,
+        "requested_view": requested_view,
+        "logged_tools": "none",
+        "active_file": "",
+        "candidate_count": 0,
+        "module_count": 0,
+        "row_count": 0,
+        "auto_mapped_count": 0,
+        "score_file_ready": "",
+        "kept_rows": 0,
+        "dropped_rows": 0,
+        "build_check": "",
+    }
+
+    if source_type == "vcf" and isinstance(analysis, AnalysisResponse):
+        tokens.update(
+            {
+                "active_file": analysis.facts.file_name,
+                "logged_tools": _stringify_logged_tools(analysis.used_tools),
+                "candidate_count": len(analysis.candidate_variants or []),
+            }
+        )
+        return tokens
+
+    if source_type == "raw_qc" and isinstance(analysis, RawQcResponse):
+        tokens.update(
+            {
+                "active_file": analysis.facts.file_name,
+                "logged_tools": _stringify_logged_tools(analysis.used_tools),
+                "module_count": len(analysis.modules),
+            }
+        )
+        return tokens
+
+    if source_type == "summary_stats" and isinstance(analysis, SummaryStatsResponse):
+        auto_mapped_count = sum(1 for value in analysis.mapped_fields.model_dump().values() if value)
+        tokens.update(
+            {
+                "active_file": analysis.file_name,
+                "logged_tools": _stringify_logged_tools(getattr(analysis, "used_tools", []) or []),
+                "row_count": analysis.row_count,
+                "auto_mapped_count": auto_mapped_count,
+            }
+        )
+        prs_prep_result = context.get("prs_prep_result")
+        if isinstance(prs_prep_result, PrsPrepResponse):
+            tokens.update(
+                {
+                    "active_file": prs_prep_result.file_name,
+                    "score_file_ready": "yes" if prs_prep_result.score_file_ready else "no",
+                    "kept_rows": prs_prep_result.kept_rows,
+                    "dropped_rows": prs_prep_result.dropped_rows,
+                    "build_check": (
+                        f"{prs_prep_result.build_check.inferred_build} "
+                        f"({prs_prep_result.build_check.build_confidence})"
+                    ),
+                }
+            )
+        return tokens
+
+    return tokens
+
+
+def _format_workflow_answer(
+    manifest: dict[str, object],
+    source_type: str,
+    analysis: object,
+    context: dict[str, Any],
+) -> str:
+    workflow_name = str(manifest.get("name") or "")
+    requested_view = str(manifest.get("requested_view") or "")
+    template = str(manifest.get("answer_template") or "").strip()
+    tokens = _workflow_answer_tokens(source_type, workflow_name, requested_view, analysis, context)
+    return template.format_map(_SafeFormatDict(tokens))
+
+
 def _summary_stats_workflow_context(
     analysis: SummaryStatsResponse,
 ) -> dict[str, Any]:
@@ -848,49 +739,22 @@ def _run_registered_summary_stats_workflow_from_manifest(
             raise ValueError(f"Workflow {manifest.get('name')} contains a non-object step.")
         _run_summary_stats_workflow_step(step, context)
 
-    workflow_name = str(manifest.get("name") or "")
     requested_view = str(manifest.get("requested_view") or "sumstats")
-
-    if workflow_name == "summary_stats_review":
-        refreshed: SummaryStatsResponse = context["analysis"]
-        auto_mapped_count = sum(1 for value in refreshed.mapped_fields.model_dump().values() if value)
-        answer = (
-            "The summary_stats_review workflow was rerun on the active source.\n\n"
-            f"- Workflow: `{workflow_name}`\n"
-            f"- Active file: `{refreshed.file_name}`\n"
-            f"- Rows detected: {refreshed.row_count}\n"
-            f"- Auto-mapped fields: {auto_mapped_count}\n\n"
-            "The Summary Statistics Review state has been refreshed. Use `$studio ...` for grounded explanation of the current review state, or ask for a downstream workflow such as PRS preparation."
-        )
-        return {
-            "answer": answer,
-            "analysis": refreshed,
-            "requested_view": requested_view,
-        }
-
-    if workflow_name == "prs_prep":
-        prs_prep_result: PrsPrepResponse = context["prs_prep_result"]
-        refreshed = analysis.model_copy(update={"prs_prep_result": prs_prep_result})
-        answer = (
-            "The prs_prep workflow was run on the active summary-statistics source.\n\n"
-            f"- Workflow: `{workflow_name}`\n"
-            f"- Active file: `{prs_prep_result.file_name}`\n"
-            f"- Build check: {prs_prep_result.build_check.inferred_build} ({prs_prep_result.build_check.build_confidence})\n"
-            f"- Score-file rows kept: {prs_prep_result.kept_rows}\n"
-            f"- Score-file rows dropped: {prs_prep_result.dropped_rows}\n"
-            f"- Score file ready: {'yes' if prs_prep_result.score_file_ready else 'no'}\n\n"
-            "The PRS Prep Review state has been added to Studio. Use `$studio ...` to ask grounded questions about build check, harmonization, or score-file readiness."
-        )
-        return {
-            "answer": answer,
-            "analysis": refreshed,
-            "requested_view": requested_view,
-            "prs_prep_result": prs_prep_result,
-        }
-
-    raise NotImplementedError(
-        f"Workflow {workflow_name} is registered but not yet executable in the structured summary-statistics runner."
+    prs_prep_result = context.get("prs_prep_result")
+    refreshed = (
+        analysis.model_copy(update={"prs_prep_result": prs_prep_result})
+        if isinstance(prs_prep_result, PrsPrepResponse)
+        else context["analysis"]
     )
+    answer = _format_workflow_answer(manifest, "summary_stats", refreshed, context)
+    result: dict[str, object] = {
+        "answer": answer,
+        "analysis": refreshed,
+        "requested_view": requested_view,
+    }
+    if isinstance(prs_prep_result, PrsPrepResponse):
+        result["prs_prep_result"] = prs_prep_result
+    return result
 
 
 def _raw_qc_workflow_context(
@@ -944,17 +808,9 @@ def _run_registered_raw_qc_workflow_from_manifest(
             raise ValueError(f"Workflow {manifest.get('name')} contains a non-object step.")
         _run_raw_qc_workflow_step(step, context)
 
-    workflow_name = str(manifest.get("name") or "")
     refreshed: RawQcResponse = context["analysis"]
     requested_view = str(manifest.get("requested_view") or "rawqc")
-    answer = (
-        "The raw_qc_review workflow was rerun on the active source.\n\n"
-        f"- Workflow: `{workflow_name}`\n"
-        f"- Active file: `{refreshed.facts.file_name}`\n"
-        f"- Logged tools: {', '.join(refreshed.used_tools or []) or 'none'}\n"
-        f"- Modules: {len(refreshed.modules)}\n\n"
-        "The raw-QC state has been refreshed. Use `@samtools` for additional alignment review on compatible sources, or `$studio ...` for grounded explanation of the current Studio state."
-    )
+    answer = _format_workflow_answer(manifest, "raw_qc", refreshed, context)
     return {
         "answer": answer,
         "analysis": refreshed,
@@ -1326,30 +1182,19 @@ def run_registered_analysis_workflow(
             "The active analysis does not expose a source VCF path, so this workflow cannot be rerun from chat."
         )
 
-    if workflow_name == "representative_vcf_review":
-        refreshed = analyze_vcf_workflow(
-            analysis.source_vcf_path or "",
-            annotation_scope="representative",
-            annotation_limit=None,
-        )
-        requested_view = str(manifest.get("requested_view") or "summary")
-        answer = (
-            "The representative VCF review workflow was rerun on the active source.\n\n"
-            f"- Workflow: `{workflow_name}`\n"
-            f"- Active file: `{refreshed.facts.file_name}`\n"
-            f"- Logged tools: {', '.join(refreshed.used_tools or []) or 'none'}\n"
-            f"- Candidate variants: {len(refreshed.candidate_variants or [])}\n\n"
-            "The active VCF analysis state has been refreshed. Open Studio cards or ask follow-up questions. Use `$studio ...` if you want the answer grounded in the current VCF review state."
-        )
-        return {
-            "answer": answer,
-            "analysis": refreshed,
-            "requested_view": requested_view,
-        }
-
-    raise NotImplementedError(
-        f"Workflow {workflow_name} is registered but not yet executable in the generic analysis runner."
+    refreshed = _run_registered_vcf_workflow_from_manifest(
+        analysis.source_vcf_path or "",
+        manifest,
+        annotation_scope="representative",
+        annotation_limit=None,
     )
+    requested_view = str(manifest.get("requested_view") or "summary")
+    answer = _format_workflow_answer(manifest, "vcf", refreshed, {})
+    return {
+        "answer": answer,
+        "analysis": refreshed,
+        "requested_view": requested_view,
+    }
 
 
 def run_registered_raw_qc_workflow(

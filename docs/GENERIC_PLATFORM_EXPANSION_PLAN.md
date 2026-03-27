@@ -269,6 +269,24 @@ Move domain-specific execution details out of `workflows.py`.
 
 - `workflows.py` becomes orchestration-only.
 
+### Current Status
+
+Partially completed on branch `codex/generic_tool`:
+
+- VCF workflow transforms were moved to:
+  - `app/services/workflow_transforms.py`
+- VCF fallback logic was moved to:
+  - `app/services/workflow_fallbacks.py`
+- VCF preprocess/postprocess hooks were moved to:
+  - `app/services/workflow_hooks.py`
+- `workflows.py` now calls these registries instead of carrying the VCF hook and transform bodies inline
+
+Remaining work for later stages:
+
+- move or reduce remaining non-VCF step registries
+- shrink the legacy VCF path
+- continue moving response assembly and bootstrap logic out of `workflows.py`
+
 ## Stage 6. Convert Upload Bootstrap Into Workflow-Driven Source Initialization
 
 ### Objective
