@@ -8,9 +8,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.models import AnalysisResponse, PrsPrepResponse, RawQcResponse, SummaryStatsResponse, SymbolicAltSummary, ToolInfo
-from app.services.fastqc import FASTQC_OUTPUT_DIR
-from app.services.prs_prep import analyze_prs_prep
-from app.services.summary_stats import analyze_summary_stats
 from app.services.tool_runner import discover_tools, run_tool
 from app.services.workflow_fallbacks import compute_vcf_fallback_value
 from app.services.workflow_hooks import (
@@ -24,6 +21,9 @@ from app.services.workflow_responses import (
     build_summary_stats_workflow_result,
 )
 from app.services.workflow_transforms import transform_bound_value
+from plugins.fastqc_execution_tool.logic import FASTQC_OUTPUT_DIR
+from plugins.prs_prep_tool.logic import analyze_prs_prep
+from plugins.summary_stats_review_tool.logic import analyze_summary_stats
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]

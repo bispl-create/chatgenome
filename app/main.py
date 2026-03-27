@@ -49,16 +49,7 @@ from app.models import (
     WorkflowStartRequest,
 )
 from app.services.chat import answer_analysis_chat, answer_raw_qc_chat, answer_summary_stats_chat
-from app.services.fastqc import FASTQC_OUTPUT_DIR
-from app.services.filtering import run_filter
-from app.services.gatk_liftover import run_gatk_liftover_vcf
 from app.services.jobs import create_job, get_job, run_job
-from app.services.ldblockshow import LDBLOCKSHOW_OUTPUT_DIR, run_ldblockshow
-from app.services.plink import run_plink
-from app.services.r_vcf_plots import RPLOT_OUTPUT_DIR, run_cmplot_association, run_qqman_association, run_r_vcf_plots
-from app.services.samtools import run_samtools
-from app.services.snpeff import run_snpeff
-from app.services.summary_stats import load_summary_stats_rows
 from app.services.source_bootstrap import (
     load_bootstrap_manifest,
     persist_uploaded_source_bytes,
@@ -76,6 +67,15 @@ from app.services.workflows import (
     analyze_prs_prep_workflow,
     analyze_vcf_workflow,
 )
+from plugins.fastqc_execution_tool.logic import FASTQC_OUTPUT_DIR
+from plugins.filtering_view_tool.logic import run_filter
+from plugins.gatk_liftover_vcf_tool.logic import run_gatk_liftover_vcf
+from plugins.ldblockshow_execution_tool.logic import LDBLOCKSHOW_OUTPUT_DIR, run_ldblockshow
+from plugins.plink_execution_tool.logic import run_plink
+from plugins.qqman_execution_tool.logic import RPLOT_OUTPUT_DIR, run_cmplot_association, run_qqman_association, run_r_vcf_plots
+from plugins.samtools_execution_tool.logic import run_samtools
+from plugins.snpeff_execution_tool.logic import run_snpeff
+from plugins.summary_stats_review_tool.logic import load_summary_stats_rows
 
 
 def _load_local_env() -> None:
