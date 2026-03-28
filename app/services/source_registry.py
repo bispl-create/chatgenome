@@ -15,8 +15,8 @@ SOURCE_REGISTRY: dict[str, dict[str, object]] = {
         "studio_renderer": "dicom_review",
         "studio_card_kind": "dicom_browser",
         "studio_preview_kind": "image_preview",
-        "workflow_names": ["dicom_review"],
-        "capabilities": ["source_upload", "bootstrap_analysis", "workflow", "grounded_chat"],
+        "workflow_names": [],
+        "capabilities": ["source_upload", "bootstrap_analysis", "grounded_chat"],
         "suffixes": [
             ".dcm",
             ".dicom",

@@ -1652,7 +1652,7 @@ export default function Page() {
         "",
         "This session expects one DICOM source:",
         "- Upload one `.dcm` or `.dicom` file",
-        "- Run `@skill dicom_review`",
+        "- The DICOM review tool runs automatically after upload",
         "- Open the Studio DICOM Review card to inspect metadata and preview state",
       ].join("\n");
     }
@@ -1784,6 +1784,29 @@ export default function Page() {
     setAnnotationSearch("");
     setError(null);
     try {
+      if (guessedSourceType === "dicom") {
+        const payload = await handleStartDicomReview(file, { silent: true });
+        if (!payload) {
+          event.target.value = "";
+          setPendingUploadRole("default");
+          return;
+        }
+        setActiveSource({
+          source_type: "dicom",
+          file_name: payload.file_name,
+          source_path: payload.source_dicom_path ?? "",
+          file_kind: payload.file_kind,
+        });
+        setStatus("DICOM review ready");
+        addMessage({
+          role: "assistant",
+          content: `DICOM source \`${file.name}\` is loaded and reviewed automatically. Open the Studio DICOM Review card to inspect metadata and the interactive viewer.`,
+        });
+        event.target.value = "";
+        setPendingUploadRole("default");
+        return;
+      }
+
       const source = await uploadActiveSource(file);
       setActiveSource(source);
       if (sessionMode === "prs") {
@@ -1832,12 +1855,6 @@ export default function Page() {
       addMessage({
         role: "assistant",
         content: `Raw sequencing source \`${file.name}\` is loaded. Run \`@skill raw_qc_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
-      });
-    } else if (guessedSourceType === "dicom") {
-      setStatus("DICOM source ready");
-      addMessage({
-        role: "assistant",
-        content: `DICOM source \`${file.name}\` is loaded. Run \`@skill dicom_review\` to start the default imaging review workflow, or \`@skill help\` to see available workflows.`,
       });
     } else if (guessedSourceType === "text") {
       setStatus("Text source ready");
@@ -2811,7 +2828,7 @@ export default function Page() {
             : sessionMode === "text_review"
               ? "Text review mode is active. Upload a text source and run `@skill text_review`."
               : sessionMode === "imaging_review"
-                ? "Imaging review mode is active. Upload a DICOM source and run `@skill dicom_review`."
+                ? "Imaging review mode is active. Upload a DICOM source to review it automatically."
               : sessionMode === "spreadsheet_review"
                 ? "Spreadsheet review mode is active. Upload a workbook source and run `@skill spreadsheet_review`."
             : "A source is loaded, but no workflow is running yet. Use `@skill help` to see available workflows, then run one such as `@skill representative_vcf_review`.",
