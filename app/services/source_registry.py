@@ -36,8 +36,8 @@ SOURCE_REGISTRY: dict[str, dict[str, object]] = {
         "studio_renderer": "cohort_browser",
         "studio_card_kind": "tabular_browser",
         "studio_preview_kind": "sheet_grid",
-        "workflow_names": ["spreadsheet_review"],
-        "capabilities": ["source_upload", "bootstrap_analysis", "workflow", "grounded_chat"],
+        "workflow_names": [],
+        "capabilities": ["source_upload", "bootstrap_analysis", "grounded_chat"],
         "suffixes": [
             ".xlsx",
             ".xlsm",
@@ -57,8 +57,8 @@ SOURCE_REGISTRY: dict[str, dict[str, object]] = {
         "studio_renderer": "text",
         "studio_card_kind": "document_viewer",
         "studio_preview_kind": "markdown",
-        "workflow_names": ["text_review"],
-        "capabilities": ["source_upload", "bootstrap_analysis", "workflow", "grounded_chat"],
+        "workflow_names": [],
+        "capabilities": ["source_upload", "bootstrap_analysis", "grounded_chat"],
         "suffixes": [
             ".markdown",
             ".md",

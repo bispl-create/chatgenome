@@ -701,10 +701,6 @@ def _render_skill_help(source_type: str | None = None, selected: dict[str, objec
     elif source_type == "summary_stats":
         lines.append("- `@skill summary_stats_review`")
         lines.append("- `@skill prs_prep`")
-    elif source_type == "text":
-        lines.append("- `@skill text_review`")
-    elif source_type == "spreadsheet":
-        lines.append("- `@skill spreadsheet_review`")
     else:
         lines.append("- `@skill help`")
         lines.append("- `@skill representative_vcf_review`")

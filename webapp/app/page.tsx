@@ -1633,7 +1633,7 @@ export default function Page() {
         "",
         "Next steps:",
         "- Upload one `.md`, `.markdown`, `.text`, `.note`, or `.log` file",
-        "- Run `@skill text_review`",
+        "- The text review tool runs automatically after upload",
       ].join("\n");
     }
     if (mode === "spreadsheet_review") {
@@ -1642,7 +1642,7 @@ export default function Page() {
         "",
         "This session expects one workbook source:",
         "- Upload one `.xlsx` or `.xlsm` workbook",
-        "- Run `@skill spreadsheet_review`",
+        "- The cohort sheet browser tool runs automatically after upload",
         "- Open the Studio cohort browser card to inspect sheets, schema, subjects, and missingness",
       ].join("\n");
     }
@@ -1784,6 +1784,50 @@ export default function Page() {
     setAnnotationSearch("");
     setError(null);
     try {
+      if (guessedSourceType === "text") {
+        const payload = await handleStartTextReview(file, { silent: true });
+        if (!payload) {
+          event.target.value = "";
+          setPendingUploadRole("default");
+          return;
+        }
+        setActiveSource({
+          source_type: "text",
+          file_name: payload.file_name,
+          source_path: payload.source_text_path ?? "",
+        });
+        setStatus("Text review ready");
+        addMessage({
+          role: "assistant",
+          content: `Text source \`${file.name}\` is loaded and reviewed automatically. Open the Studio text review card to inspect the rendered document.`,
+        });
+        event.target.value = "";
+        setPendingUploadRole("default");
+        return;
+      }
+
+      if (guessedSourceType === "spreadsheet") {
+        const payload = await handleStartSpreadsheetReview(file, { silent: true });
+        if (!payload) {
+          event.target.value = "";
+          setPendingUploadRole("default");
+          return;
+        }
+        setActiveSource({
+          source_type: "spreadsheet",
+          file_name: payload.file_name,
+          source_path: payload.source_spreadsheet_path ?? "",
+        });
+        setStatus("Spreadsheet review ready");
+        addMessage({
+          role: "assistant",
+          content: `Spreadsheet source \`${file.name}\` is loaded and reviewed automatically. Open the Studio cohort browser card to inspect sheets, schema, and missingness.`,
+        });
+        event.target.value = "";
+        setPendingUploadRole("default");
+        return;
+      }
+
       if (guessedSourceType === "dicom") {
         const payload = await handleStartDicomReview(file, { silent: true });
         if (!payload) {
@@ -1855,18 +1899,6 @@ export default function Page() {
       addMessage({
         role: "assistant",
         content: `Raw sequencing source \`${file.name}\` is loaded. Run \`@skill raw_qc_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
-      });
-    } else if (guessedSourceType === "text") {
-      setStatus("Text source ready");
-      addMessage({
-        role: "assistant",
-        content: `Text source \`${file.name}\` is loaded. Run \`@skill text_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
-      });
-    } else if (guessedSourceType === "spreadsheet") {
-      setStatus("Spreadsheet source ready");
-      addMessage({
-        role: "assistant",
-        content: `Spreadsheet source \`${file.name}\` is loaded. Run \`@skill spreadsheet_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
       });
     } else if (guessedSourceType === "summary_stats") {
       setStatus("Summary statistics source ready");
@@ -2826,11 +2858,11 @@ export default function Page() {
           sessionMode === "prs"
             ? "PRS mode is active. Upload the summary-statistics and target-genotype sources as needed, then use `@skill prs_prep` and `@plink score`."
             : sessionMode === "text_review"
-              ? "Text review mode is active. Upload a text source and run `@skill text_review`."
+              ? "Text review mode is active. Upload a text source to review it automatically."
               : sessionMode === "imaging_review"
                 ? "Imaging review mode is active. Upload a DICOM source to review it automatically."
               : sessionMode === "spreadsheet_review"
-                ? "Spreadsheet review mode is active. Upload a workbook source and run `@skill spreadsheet_review`."
+                ? "Spreadsheet review mode is active. Upload a workbook source to review it automatically."
             : "A source is loaded, but no workflow is running yet. Use `@skill help` to see available workflows, then run one such as `@skill representative_vcf_review`.",
       });
       return;
