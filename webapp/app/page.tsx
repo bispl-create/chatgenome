@@ -1851,6 +1851,28 @@ export default function Page() {
         return;
       }
 
+      if (guessedSourceType === "summary_stats") {
+        const payload = await handleStartSummaryStats(file, { silent: true });
+        if (!payload) {
+          event.target.value = "";
+          setPendingUploadRole("default");
+          return;
+        }
+        setActiveSource({
+          source_type: "summary_stats",
+          file_name: payload.file_name,
+          source_path: payload.source_stats_path ?? "",
+        });
+        setStatus("Summary statistics review ready");
+        addMessage({
+          role: "assistant",
+          content: `Summary statistics source \`${file.name}\` is loaded and reviewed automatically. Open the Studio summary card to inspect preview rows, warnings, and schema clues.`,
+        });
+        event.target.value = "";
+        setPendingUploadRole("default");
+        return;
+      }
+
       const source = await uploadActiveSource(file);
       setActiveSource(source);
       if (sessionMode === "prs") {
@@ -1899,12 +1921,6 @@ export default function Page() {
       addMessage({
         role: "assistant",
         content: `Raw sequencing source \`${file.name}\` is loaded. Run \`@skill raw_qc_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
-      });
-    } else if (guessedSourceType === "summary_stats") {
-      setStatus("Summary statistics source ready");
-      addMessage({
-        role: "assistant",
-        content: `Summary statistics source \`${file.name}\` is loaded. Run \`@skill summary_stats_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
       });
     } else {
       setStatus("VCF source ready");

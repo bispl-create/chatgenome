@@ -113,7 +113,7 @@ SOURCE_REGISTRY: dict[str, dict[str, object]] = {
         "studio_renderer": "sumstats",
         "studio_card_kind": "tabular_summary",
         "studio_preview_kind": "preview_rows",
-        "workflow_names": ["summary_stats_review", "prs_prep"],
+        "workflow_names": ["prs_prep"],
         "capabilities": ["source_upload", "bootstrap_analysis", "direct_tool", "workflow"],
         "suffixes": [
             ".sumstats.gz",
