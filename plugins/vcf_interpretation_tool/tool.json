@@ -1,0 +1,9 @@
+{
+  "name": "vcf_interpretation_tool",
+  "entrypoint": "plugins.vcf_interpretation_tool.logic:execute",
+  "description": "Runs VCF interpretation as a composite pass: annotation, ROH analysis, CADD/REVEL enrichment, and candidate ranking.",
+  "task": "vcf-interpretation",
+  "modality": "genomics",
+  "approval_required": false,
+  "source": "plugin"
+}
