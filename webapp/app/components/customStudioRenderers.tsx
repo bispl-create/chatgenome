@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 
+import DicomInteractiveViewer from "./DicomInteractiveViewer";
 import IgvBrowser from "./IgvBrowser";
 import { type StudioRendererBuilderArgs, type StudioRendererRegistry } from "./studioRendererTypes";
 
@@ -199,17 +200,45 @@ function CohortBrowserCard({
 function DicomReviewCard({
   analysis,
   components,
-  helpers,
 }: {
   analysis: any;
   components: StudioRendererBuilderArgs["components"];
   helpers: StudioRendererBuilderArgs["helpers"];
 }) {
-  const { StudioMetricGrid, StudioSimpleList, WarningListCard } = components;
-  const { formatNumber } = helpers;
+  const { StudioMetricGrid, WarningListCard } = components;
   const metadata = Array.isArray(analysis?.metadata_items) ? analysis.metadata_items[0] ?? null : null;
   const preview = metadata?.preview ?? analysis?.artifacts?.dicom_review?.preview ?? null;
   const series = Array.isArray(analysis?.series) ? analysis.series : [];
+  const seriesGroups = useMemo(
+    () =>
+      series.map((item: any, index: number) => ({
+        id: String(item.series_instance_uid ?? `series-${index}`),
+        label: String(item.series_description ?? item.modality ?? `Series ${index + 1}`),
+        files: [
+          {
+            fileName: String((item.example_files ?? [])[0] ?? metadata?.file_name ?? analysis?.file_name ?? `dicom-${index + 1}.dcm`),
+            preview: item.preview ?? preview ?? null,
+            preview_presets: item.preview_presets ?? undefined,
+          },
+        ],
+      })),
+    [analysis?.file_name, metadata?.file_name, preview, series],
+  );
+  const fallbackSeriesGroups =
+    seriesGroups.length > 0
+      ? seriesGroups
+      : [
+          {
+            id: String(metadata?.series_instance_uid ?? "single-series"),
+            label: String(metadata?.series_description ?? metadata?.modality ?? "DICOM file"),
+            files: [
+              {
+                fileName: String(metadata?.file_name ?? analysis?.file_name ?? "dicom.dcm"),
+                preview: preview ?? null,
+              },
+            ],
+          },
+        ];
 
   return (
     <section className="notebookPanel studioCanvasPanel">
@@ -228,40 +257,49 @@ function DicomReviewCard({
             { label: "Series", value: String(series.length), tone: "good" },
           ]}
         />
-        {preview?.available && preview?.image_data_url ? (
+        <div className="resultSectionSplit" style={{ gridTemplateColumns: "minmax(0, 1.8fr) minmax(280px, 0.9fr)", alignItems: "start" }}>
           <article className="miniCard">
-            <h3>Preview</h3>
-            <div style={{ display: "flex", justifyContent: "center" }}>
-              <img
-                src={String(preview.image_data_url)}
-                alt="DICOM preview"
-                style={{ maxWidth: "100%", maxHeight: "28rem", borderRadius: "1rem", objectFit: "contain" }}
-              />
-            </div>
+            <h3>Interactive viewer</h3>
+            <DicomInteractiveViewer seriesGroups={fallbackSeriesGroups} />
           </article>
-        ) : null}
-        <div className="resultSectionSplit">
-          <article className="miniCard">
+          <article className="miniCard" style={{ maxWidth: "100%", overflow: "hidden" }}>
             <h3>Metadata</h3>
-            <StudioSimpleList
-              items={[
-                { label: "Study", detail: String(metadata?.study_description ?? "not available") },
-                { label: "Series", detail: String(metadata?.series_description ?? "not available") },
-                { label: "Study UID", detail: String(metadata?.study_instance_uid ?? "not available") },
-                { label: "Series UID", detail: String(metadata?.series_instance_uid ?? "not available") },
-                { label: "File", detail: String(metadata?.file_name ?? analysis?.file_name ?? "not available") },
-              ]}
-            />
-          </article>
-          <article className="miniCard">
-            <h3>Series summary</h3>
-            <StudioSimpleList
-              items={series.map((item: any) => ({
-                label: String(item.series_description ?? item.modality ?? "Series"),
-                detail: `${item.modality ?? "unknown"} | ${item.instance_count ?? 0} instance(s)`,
-              }))}
-              emptyLabel="No series summary is available."
-            />
+            <div className="variantTableWrap summaryStatsTableWrap">
+              <table className="variantTable summaryStatsTable">
+                <tbody>
+                  <tr>
+                    <th>Study</th>
+                    <td>{String(metadata?.study_description ?? "not available")}</td>
+                  </tr>
+                  <tr>
+                    <th>Series</th>
+                    <td>{String(metadata?.series_description ?? "not available")}</td>
+                  </tr>
+                  <tr>
+                    <th>Study UID</th>
+                    <td>{String(metadata?.study_instance_uid ?? "not available")}</td>
+                  </tr>
+                  <tr>
+                    <th>Series UID</th>
+                    <td>{String(metadata?.series_instance_uid ?? "not available")}</td>
+                  </tr>
+                  <tr>
+                    <th>File</th>
+                    <td>{String(metadata?.file_name ?? analysis?.file_name ?? "not available")}</td>
+                  </tr>
+                  <tr>
+                    <th>Series summary</th>
+                    <td>
+                      {series.length
+                        ? series
+                            .map((item: any) => `${item.series_description ?? item.modality ?? "Series"} (${item.modality ?? "unknown"}, ${item.instance_count ?? 0} instance(s))`)
+                            .join(" | ")
+                        : "No series summary is available."}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </article>
         </div>
         <WarningListCard
