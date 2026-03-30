@@ -5,5 +5,14 @@
   "task": "vcf-interpretation",
   "modality": "genomics",
   "approval_required": false,
-  "source": "plugin"
+  "source": "plugin",
+  "routing": {
+    "trigger_keywords": ["vcf_interpret", "vcfinterpret", "interpret"]
+  },
+  "direct_chat": {
+    "endpoint": "vcf-interpretation",
+    "source_types": ["vcf"],
+    "requested_view": "candidates",
+    "studio": {"renderer": "candidates"}
+  }
 }

@@ -102,8 +102,8 @@ export function resolveStudioRendererKey({
   dispatch?: StudioRendererDispatch | null;
 }): string | null {
   return (
-    findRendererKeyByRequestedView(dispatch?.renderer) ??
     findRendererKeyByRequestedView(activeView) ??
+    findRendererKeyByRequestedView(dispatch?.renderer) ??
     findRendererKeyByRequestedView(dispatch?.requestedView) ??
     findRendererKeyByResultKind(dispatch?.resultKind) ??
     null

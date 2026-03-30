@@ -5,5 +5,13 @@
   "task": "vcf-review",
   "modality": "genomics",
   "approval_required": false,
-  "source": "plugin"
+  "source": "plugin",
+  "routing": {
+    "trigger_keywords": ["vcfreview", "vcf_review", "vcf review"]
+  },
+  "direct_chat": {
+    "endpoint": "vcf-review",
+    "requested_view": "clinvar",
+    "studio": {"renderer": "clinvar"}
+  }
 }

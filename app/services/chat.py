@@ -66,6 +66,9 @@ from plugins.plink_execution_tool.logic import run_plink
 from plugins.qqman_execution_tool.logic import run_qqman_association
 from plugins.samtools_execution_tool.logic import run_samtools
 from plugins.snpeff_execution_tool.logic import run_snpeff
+from plugins.vcf_interpretation_tool.logic import execute as run_vcf_interpretation
+from plugins.vcf_qc_tool.logic import summarize_vcf
+from plugins.vcf_review_tool.logic import execute as run_vcf_review
 
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "45"))
 
@@ -1663,12 +1666,150 @@ def _execute_analysis_direct_plink(
     )
 
 
+def _execute_analysis_direct_vcf_interpretation(
+    payload: AnalysisChatRequest,
+    tool_request: dict[str, object],
+    direct_chat: dict[str, Any],
+    options: dict[str, str],
+) -> AnalysisChatResponse:
+    del tool_request, options
+    source_vcf_path = payload.analysis.source_vcf_path
+    if not source_vcf_path:
+        return AnalysisChatResponse(
+            answer="The current analysis context does not include a source VCF path, so interpretation cannot be run.",
+            citations=[],
+            used_fallback=True,
+            used_tools=["vcf_interpretation_tool"],
+        )
+    result = run_vcf_interpretation({
+        "vcf_path": source_vcf_path,
+        "facts": payload.analysis.facts.model_dump(),
+        "scope": "representative",
+        "ranking_limit": 8,
+    })
+    from app.models import RankedCandidate, RohSegment, VariantAnnotation
+    annotations = [VariantAnnotation(**a) for a in result.get("annotations", [])]
+    roh_segments = [RohSegment(**r) for r in result.get("roh_segments", [])]
+    candidate_variants = [RankedCandidate(**c) for c in result.get("candidate_variants", [])]
+    updated_analysis = payload.analysis.model_copy(update={
+        "annotations": annotations,
+        "roh_segments": roh_segments,
+        "candidate_variants": candidate_variants,
+        "used_tools": list(payload.analysis.used_tools or []) + ["vcf_interpretation_tool"],
+    })
+    return AnalysisChatResponse(
+        answer=(
+            f"VCF interpretation complete.\n\n"
+            f"- Annotations: {result.get('annotation_count', 0)}\n"
+            f"- ROH segments: {result.get('roh_segment_count', 0)}\n"
+            f"- Ranked candidates: {result.get('candidate_count', 0)}\n"
+            f"- CADD enrichment: {'yes' if result.get('cadd_lookup_performed') else 'no'} ({result.get('cadd_matched_count', 0)} matched)\n"
+            f"- REVEL enrichment: {'yes' if result.get('revel_lookup_performed') else 'no'} ({result.get('revel_matched_count', 0)} matched)\n\n"
+            "The Candidates card in Studio has been updated."
+        ),
+        citations=[],
+        used_fallback=False,
+        used_tools=["vcf_interpretation_tool"],
+        analysis=updated_analysis,
+        requested_view="candidates",
+        studio={"renderer": payload.analysis.studio.get("renderer", "qc") if isinstance(payload.analysis.studio, dict) else "qc"},
+    )
+
+
+def _execute_analysis_direct_vcf_qc(
+    payload: AnalysisChatRequest,
+    tool_request: dict[str, object],
+    direct_chat: dict[str, Any],
+    options: dict[str, str],
+) -> AnalysisChatResponse:
+    del tool_request, options
+    source_vcf_path = payload.analysis.source_vcf_path
+    if not source_vcf_path:
+        return AnalysisChatResponse(
+            answer="The current analysis context does not include a source VCF path, so VCF QC cannot be re-run.",
+            citations=[],
+            used_fallback=True,
+            used_tools=["vcf_qc_tool"],
+        )
+    max_examples = int(os.getenv("MAX_EXAMPLE_VARIANTS", "8"))
+    facts = summarize_vcf(source_vcf_path, max_examples=max_examples)
+    updated_analysis = payload.analysis.model_copy(update={"facts": facts})
+    return AnalysisChatResponse(
+        answer=(
+            f"VCF QC re-run complete.\n\n"
+            f"- Records: {facts.record_count}\n"
+            f"- Build: {facts.genome_build_guess or 'unknown'}\n"
+            f"- Ti/Tv: {facts.qc.transition_transversion_ratio if facts.qc else 'n/a'}\n"
+            f"- Pass rate: {facts.qc.pass_rate if facts.qc else 'n/a'}\n\n"
+            "The QC Summary card in Studio has been updated."
+        ),
+        citations=[],
+        used_fallback=False,
+        used_tools=["vcf_qc_tool"],
+        analysis=updated_analysis,
+        requested_view=str(direct_chat.get("requested_view") or "qc"),
+        studio={"renderer": "qc"},
+    )
+
+
+def _execute_analysis_direct_vcf_review(
+    payload: AnalysisChatRequest,
+    tool_request: dict[str, object],
+    direct_chat: dict[str, Any],
+    options: dict[str, str],
+) -> AnalysisChatResponse:
+    del tool_request, options
+    from app.models import CountSummaryItem, DetailedCountSummaryItem, SymbolicAltSummary
+    result = run_vcf_review({
+        "facts": payload.analysis.facts.model_dump(),
+        "annotations": [a.model_dump() for a in payload.analysis.annotations],
+        "candidate_variants": [c.model_dump() for c in payload.analysis.candidate_variants],
+        "references": [r.model_dump() for r in payload.analysis.references],
+    })
+    clinvar_summary = [CountSummaryItem(**item) for item in result.get("clinvar_summary", [])]
+    consequence_summary = [CountSummaryItem(**item) for item in result.get("consequence_summary", [])]
+    clinical_coverage_summary = [DetailedCountSummaryItem(**item) for item in result.get("clinical_coverage_summary", [])]
+    symbolic_alt_raw = result.get("symbolic_alt_summary")
+    symbolic_alt_summary = (
+        SymbolicAltSummary(**symbolic_alt_raw)
+        if isinstance(symbolic_alt_raw, dict) and "count" in symbolic_alt_raw
+        else payload.analysis.symbolic_alt_summary
+    )
+    updated_analysis = payload.analysis.model_copy(update={
+        "clinvar_summary": clinvar_summary,
+        "consequence_summary": consequence_summary,
+        "clinical_coverage_summary": clinical_coverage_summary,
+        "symbolic_alt_summary": symbolic_alt_summary,
+        "draft_answer": result.get("draft_answer", "") or payload.analysis.draft_answer,
+        "used_tools": list(payload.analysis.used_tools or []) + ["vcf_review_tool"],
+    })
+    return AnalysisChatResponse(
+        answer=(
+            f"VCF review complete.\n\n"
+            f"- ClinVar buckets: {len(clinvar_summary)}\n"
+            f"- Consequence buckets: {len(consequence_summary)}\n"
+            f"- Coverage rows: {len(clinical_coverage_summary)}\n"
+            f"- Symbolic ALT count: {symbolic_alt_summary.count if symbolic_alt_summary else 0}\n\n"
+            "The Clinical Review cards in Studio have been updated."
+        ),
+        citations=[],
+        used_fallback=False,
+        used_tools=["vcf_review_tool"],
+        analysis=updated_analysis,
+        requested_view="clinvar",
+        studio={"renderer": "clinvar"},
+    )
+
+
 DIRECT_TOOL_ENDPOINT_EXECUTORS: dict[str, dict[str, Any]] = {
     "vcf": {
         "liftover": _execute_analysis_direct_liftover,
         "snpeff": _execute_analysis_direct_snpeff,
         "ldblockshow": _execute_analysis_direct_ldblockshow,
         "plink": _execute_analysis_direct_plink,
+        "vcf-qc": _execute_analysis_direct_vcf_qc,
+        "vcf-interpretation": _execute_analysis_direct_vcf_interpretation,
+        "vcf-review": _execute_analysis_direct_vcf_review,
     },
     "raw_qc": {
         "samtools": _execute_raw_qc_direct_samtools,

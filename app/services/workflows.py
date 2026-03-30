@@ -566,7 +566,14 @@ def _run_registered_vcf_workflow_from_manifest(
         if not isinstance(step, dict):
             raise ValueError(f"Workflow {manifest.get('name')} contains a non-object step.")
         _run_vcf_workflow_step(step, context)
-    return assemble_analysis_response_from_vcf_context(context)
+    result = assemble_analysis_response_from_vcf_context(context)
+    requested_view = str(manifest.get("requested_view") or "").strip()
+    studio = manifest.get("studio")
+    if requested_view:
+        result.requested_view = requested_view
+    if isinstance(studio, dict):
+        result.studio = dict(studio)
+    return result
 
 
 def analyze_vcf_workflow(
@@ -574,15 +581,16 @@ def analyze_vcf_workflow(
     annotation_scope: str = "representative",
     annotation_limit: int | None = None,
 ) -> AnalysisResponse:
-    manifest = load_workflow_manifest("representative_vcf_review")
-    if manifest is None:
-        raise ValueError("The representative_vcf_review workflow manifest is not available.")
-    return _run_registered_vcf_workflow_from_manifest(
-        path,
-        manifest,
-        annotation_scope=annotation_scope,
-        annotation_limit=annotation_limit,
-    )
+    max_examples = int(os.getenv("MAX_EXAMPLE_VARIANTS", "8"))
+    result = run_tool("vcf_qc_tool", {"vcf_path": path, "max_examples": max_examples})
+    facts = transform_bound_value("analysis_facts", result.get("facts"))
+    context = _vcf_workflow_context(path, annotation_scope=annotation_scope, annotation_limit=annotation_limit)
+    context["facts"] = facts
+    context["used_tools"].append("vcf_qc_tool")
+    response = assemble_analysis_response_from_vcf_context(context)
+    response.studio = {"renderer": "qc"}
+    response.requested_view = "qc"
+    return response
 
 
 def analyze_raw_qc_workflow(path: str, original_name: str) -> RawQcResponse:

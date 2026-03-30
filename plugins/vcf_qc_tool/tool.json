@@ -6,6 +6,12 @@
   "modality": "genomics",
   "approval_required": false,
   "source": "internal",
+  "direct_chat": {
+    "endpoint": "vcf-qc",
+    "source_types": ["vcf"],
+    "requested_view": "qc",
+    "studio": {"renderer": "qc"}
+  },
   "workflow_binding": {
     "source_type": "vcf",
     "input_map": {

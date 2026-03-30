@@ -57,6 +57,8 @@ type VariantAnnotation = {
 type AnalysisResponse = {
   analysis_id: string;
   source_vcf_path?: string | null;
+  requested_view?: string | null;
+  studio?: { renderer?: string | null } | null;
   draft_answer: string;
   facts: {
     file_name: string;
@@ -1315,6 +1317,7 @@ export default function Page() {
   const [followUpAnswer, setFollowUpAnswer] = useState<string | null>(null);
   const [activeStudioView, setActiveStudioView] = useState<StudioView | null>(null);
   const [studioDispatch, setStudioDispatch] = useState<StudioRendererDispatch>({});
+  const [igvUnlocked, setIgvUnlocked] = useState(false);
   const [plinkRunning, setPlinkRunning] = useState(false);
   const [plinkConfig, setPlinkConfig] = useState({
     mode: "qc",
@@ -1331,22 +1334,42 @@ export default function Page() {
   const studioCanvasRef = useRef<HTMLElement | null>(null);
   const chatStreamRef = useRef<HTMLDivElement | null>(null);
   const summaryStatsGridRef = useRef<HTMLDivElement | null>(null);
-  const activeToolRegistry =
-    analysis?.tool_registry?.length
-      ? analysis.tool_registry
-      : rawQcAnalysis?.tool_registry?.length
-        ? rawQcAnalysis.tool_registry
-        : summaryStatsAnalysis?.tool_registry?.length
-          ? summaryStatsAnalysis.tool_registry
-        : dicomAnalysis?.tool_registry?.length
-          ? dicomAnalysis.tool_registry
-        : spreadsheetAnalysis?.tool_registry?.length
-          ? spreadsheetAnalysis.tool_registry
-        : textAnalysis?.tool_registry?.length
-          ? textAnalysis.tool_registry
-        : toolRegistry;
+  const sessionModeModality =
+    sessionMode === "vcf_analysis" || sessionMode === "raw_sequence" || sessionMode === "prs" ? "genomics"
+    : sessionMode === "imaging_review" ? "medical-image"
+    : sessionMode === "spreadsheet_review" ? "spreadsheet"
+    : sessionMode === "text_review" ? "text"
+    : null;
+  const activeToolRegistry = (() => {
+    const base =
+      analysis?.tool_registry?.length
+        ? analysis.tool_registry
+        : rawQcAnalysis?.tool_registry?.length
+          ? rawQcAnalysis.tool_registry
+          : summaryStatsAnalysis?.tool_registry?.length
+            ? summaryStatsAnalysis.tool_registry
+          : dicomAnalysis?.tool_registry?.length
+            ? dicomAnalysis.tool_registry
+          : spreadsheetAnalysis?.tool_registry?.length
+            ? spreadsheetAnalysis.tool_registry
+          : textAnalysis?.tool_registry?.length
+            ? textAnalysis.tool_registry
+          : toolRegistry;
+    if (!analysis && !rawQcAnalysis && !summaryStatsAnalysis && !dicomAnalysis && !spreadsheetAnalysis && !textAnalysis && sessionModeModality) {
+      return (base ?? []).filter((t) => t.modality === sessionModeModality);
+    }
+    return base;
+  })();
   const availableWorkflows = useMemo(() => {
     const registry = workflowRegistry.length ? workflowRegistry : DEFAULT_WORKFLOW_REGISTRY;
+    const sessionModeSourceType =
+      sessionMode === "prs" ? "summary_stats"
+      : sessionMode === "vcf_analysis" ? "vcf"
+      : sessionMode === "raw_sequence" ? "raw_qc"
+      : sessionMode === "text_review" ? "text"
+      : sessionMode === "spreadsheet_review" ? "spreadsheet"
+      : sessionMode === "imaging_review" ? "dicom"
+      : null;
     const sourceType =
       sessionMode === "prs"
         ? "summary_stats"
@@ -1362,7 +1385,7 @@ export default function Page() {
                 ? "spreadsheet"
               : textAnalysis
                 ? "text"
-              : attachedSourceType;
+              : attachedSourceType ?? sessionModeSourceType;
     return sourceType ? registry.filter((item) => item.source_type === sourceType) : registry;
   }, [workflowRegistry, analysis, rawQcAnalysis, summaryStatsAnalysis, dicomAnalysis, spreadsheetAnalysis, textAnalysis, attachedSourceType, sessionMode]);
 
@@ -1788,6 +1811,7 @@ export default function Page() {
     setFollowUpAnswer(null);
     setAnalysisQa([]);
     setActiveStudioView(null);
+    setIgvUnlocked(false);
     setSelectedAnnotationIndex(0);
     setAnnotationSearch("");
     setError(null);
@@ -1947,13 +1971,14 @@ export default function Page() {
       setPendingUploadRole("default");
       return;
     }
+    else if (!hadPreparedPrsScoreFile) {
+      await handleStartAnalysis("representative", annotationLimit, file, { silent: true });
+    }
     else {
       setStatus("VCF source ready");
       addMessage({
         role: "assistant",
-        content: hadPreparedPrsScoreFile
-          ? `VCF source \`${file.name}\` is loaded as a target genotype source. You can run \`@plink score\` now, or use \`@skill representative_vcf_review\` for the default review workflow.`
-          : `VCF source \`${file.name}\` is loaded. Run \`@skill representative_vcf_review\` to start the default review workflow, or \`@skill help\` to see available workflows.`,
+        content: `VCF source \`${file.name}\` is loaded as a target genotype source. You can run \`@plink score\` now.`,
       });
     }
     event.target.value = "";
@@ -2071,6 +2096,30 @@ export default function Page() {
     }
     const options = parseInlineOptions(remainder);
     setStatus(toolRunningStatus(alias, remainder));
+
+    if (alias === "vcfqc" || alias === "vcf_qc") {
+      const vcfPath = analysis?.source_vcf_path ?? (preAnalysisSource.source_type === "vcf" ? preAnalysisSource.source_path : null);
+      if (!vcfPath) {
+        addMessage({ role: "assistant", content: "Active VCF source가 없습니다. VCF 파일을 먼저 업로드해 주세요." });
+        return;
+      }
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/tools/vcf_qc_tool/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payload: { vcf_path: vcfPath, max_examples: 8 } }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const toolResult = (await response.json()) as ToolRunResponse;
+      const facts = toolResult.result?.facts;
+      setAnalysis((current) => current ? { ...current, facts: facts ?? current.facts } : current);
+      activateStudioFromPayload({ studio: { renderer: "qc" }, requested_view: "qc" });
+      setStatus("VCF QC complete");
+      addMessage({
+        role: "assistant",
+        content: `VCF QC re-run complete for \`${preAnalysisSource.file_name}\`.\n\n- Records: ${facts?.record_count ?? "n/a"}\n- Build: ${facts?.genome_build_guess ?? "unknown"}`,
+      });
+      return;
+    }
 
     if (alias === "liftover" && preAnalysisSource.source_type === "vcf") {
       const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/liftover/run`, {
@@ -2225,7 +2274,7 @@ export default function Page() {
       return;
     }
 
-    if ((alias === "vcfinterpretation" || alias === "vcf_interpretation") && preAnalysisSource.source_type === "vcf") {
+    if ((alias === "vcfinterpretation" || alias === "vcf_interpretation" || alias === "vcf_interpret" || alias === "vcfinterpret") && preAnalysisSource.source_type === "vcf") {
       const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/tools/vcf_interpretation/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2290,21 +2339,22 @@ export default function Page() {
     }
 
     if ((alias === "vcfreview" || alias === "vcf_review") && preAnalysisSource.source_type === "vcf") {
-      if (!analysis?.annotations?.length) {
+      if (!analysis?.facts) {
         addMessage({
           role: "assistant",
-          content: "VCF review needs interpreted annotations first. Run `@vcfinterpretation` before `@vcfreview`.",
+          content: `VCF QC analysis가 아직 로드되지 않았습니다. 파일을 다시 업로드해 주세요.\n\n현재 상태: source=${preAnalysisSource.source_type}, analysis=${analysis ? "loaded" : "null"}`,
         });
         setStatus(toolReadyStatus(alias, remainder));
         return;
       }
+      addMessage({ role: "assistant", content: "VCF review 실행 중... ClinVar, consequence, coverage 분석 중입니다." });
       const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/tools/vcf_review/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           payload: {
             facts: analysis.facts,
-            annotations: analysis.annotations,
+            annotations: analysis.annotations ?? [],
             candidate_variants: analysis.candidate_variants ?? [],
             references: analysis.references ?? [],
           },
@@ -2343,6 +2393,19 @@ export default function Page() {
           `- Coverage rows: ${Array.isArray(payload.result?.clinical_coverage_summary) ? payload.result.clinical_coverage_summary.length : 0}\n` +
           `- Symbolic ALT count: ${payload.result?.symbolic_alt_summary?.count ?? 0}`,
       });
+      return;
+    }
+
+    if (alias === "igv" && preAnalysisSource.source_type === "vcf") {
+      if (!analysis?.facts) {
+        addMessage({ role: "assistant", content: "VCF analysis가 아직 로드되지 않았습니다. 파일을 다시 업로드해 주세요." });
+        setStatus(toolReadyStatus(alias, remainder));
+        return;
+      }
+      setIgvUnlocked(true);
+      setActiveStudioView("igv");
+      setStatus(toolReadyStatus(alias, remainder));
+      addMessage({ role: "assistant", content: "IGV Plot을 열었습니다." });
       return;
     }
 
@@ -2407,6 +2470,11 @@ export default function Page() {
       return;
     }
 
+    // No frontend handler matched — if an analysis is loaded, let the backend chat handler try
+    if (analysis) {
+      await handleAskAnalysisQuestion(`@${alias}${remainder ? " " + remainder : ""}`, analysis);
+      return;
+    }
     addMessage({
       role: "assistant",
       content:
@@ -2787,7 +2855,7 @@ export default function Page() {
       setTextAnalysis(null);
       setFollowUpAnswer(null);
       setAnalysisQa([]);
-      setActiveStudioView(null);
+      activateStudioFromPayload(payload);
       setSelectedAnnotationIndex(0);
       setComposerText("");
       setStatus("Analysis ready");
@@ -2857,9 +2925,9 @@ export default function Page() {
       if (remainder === "text_review") {
         setSessionMode("text_review");
         setStatus("Text review mode selected");
-      addMessage({ role: "assistant", content: modeSelectionText("text_review") });
-      return;
-    }
+        addMessage({ role: "assistant", content: modeSelectionText("text_review") });
+        return;
+      }
       if (remainder === "spreadsheet_review") {
         setSessionMode("spreadsheet_review");
         setStatus("Spreadsheet review mode selected");
@@ -2883,6 +2951,41 @@ export default function Page() {
         content: sessionMode ? "먼저 현재 mode에 필요한 source 파일을 업로드해 주세요." : "먼저 `@mode prs`, `@mode vcf_analysis`, `@mode raw_sequence`, `@mode text_review`, `@mode spreadsheet_review`, 또는 `@mode imaging_review`를 선택한 뒤 source 파일을 업로드해 주세요.",
       });
       setComposerText("");
+      return;
+    }
+
+    // @tool intercept — runs regardless of whether an analysis is already loaded
+    const earlyToolMatch = text.match(/^@([A-Za-z0-9_-]+)(?:\s+(.*))?$/);
+    if (
+      earlyToolMatch &&
+      earlyToolMatch[1].toLowerCase() !== "skill" &&
+      earlyToolMatch[1].toLowerCase() !== "mode"
+    ) {
+      const alias = earlyToolMatch[1].trim();
+      const remainder = (earlyToolMatch[2] ?? "").trim();
+      const isHelp = /^(help|--help|-h)(\s+.*)?$/i.test(remainder);
+      setComposerText("");
+
+      if (isHelp) {
+        addMessage({ role: "user", content: text });
+        try {
+          const helpText = await fetchToolHelpText(alias);
+          addMessage({ role: "assistant", content: helpText });
+        } catch (caught) {
+          const message = caught instanceof Error ? caught.message : String(caught);
+          addMessage({ role: "assistant", content: `\`@${alias} help\` 조회 중 오류가 발생했습니다: ${message}` });
+        }
+        return;
+      }
+
+      addMessage({ role: "user", content: text });
+      try {
+        await runPreAnalysisTool(alias.toLowerCase(), remainder);
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        setStatus(toolFailedStatus(alias.toLowerCase(), remainder));
+        addMessage({ role: "assistant", content: `\`@${alias}\` 실행 중 오류가 발생했습니다: ${message}` });
+      }
       return;
     }
 
@@ -2970,45 +3073,6 @@ export default function Page() {
             `\`@skill ${workflowName}\` is not compatible with the current active source.` +
             (attachedSourceType ? ` Current source type: \`${attachedSourceType}\`.` : ""),
         });
-        return;
-      }
-
-      const atToolMatch = text.match(/^@([A-Za-z0-9_-]+)(?:\s+(.*))?$/);
-      if (atToolMatch && atToolMatch[1].toLowerCase() !== "skill") {
-        const alias = atToolMatch[1].trim();
-        const remainder = (atToolMatch[2] ?? "").trim();
-        const isHelp = /^(help|--help|-h)(\s+.*)?$/i.test(remainder);
-        setComposerText("");
-
-        if (isHelp) {
-          addMessage({ role: "user", content: text });
-          try {
-            const helpText = await fetchToolHelpText(alias);
-            addMessage({
-              role: "assistant",
-              content: helpText,
-            });
-          } catch (caught) {
-            const message = caught instanceof Error ? caught.message : String(caught);
-            addMessage({
-              role: "assistant",
-              content: `\`@${alias} help\` 조회 중 오류가 발생했습니다: ${message}`,
-            });
-          }
-          return;
-        }
-
-        addMessage({ role: "user", content: text });
-        try {
-          await runPreAnalysisTool(alias.toLowerCase(), remainder);
-        } catch (caught) {
-          const message = caught instanceof Error ? caught.message : String(caught);
-          setStatus(toolFailedStatus(alias.toLowerCase(), remainder));
-          addMessage({
-            role: "assistant",
-            content: `\`@${alias}\` 실행 중 오류가 발생했습니다: ${message}`,
-          });
-        }
         return;
       }
 
@@ -4005,29 +4069,71 @@ export default function Page() {
           { id: "text" as StudioView, title: "Text Review", subtitle: "Preview and note-length summary" },
         ]
     : analysis
-      ? [
-          { id: "provenance", title: "Workflow Setup", subtitle: "Tools, scope, and run policy" },
-          { id: "qc", title: "QC Summary", subtitle: "PASS, Ti/Tv, GT quality" },
-          { id: "coverage", title: "Clinical Coverage", subtitle: "Annotation completeness view" },
-          { id: "snpeff", title: "SnpEff Review", subtitle: "Local effect annotation preview" },
-          { id: "plink", title: "PLINK", subtitle: "QC command runner and result review" },
-          ...(liftoverResultForStudio
-            ? [{ id: "liftover" as StudioView, title: "LiftOver Review", subtitle: "Genome build conversion result" }]
-            : []),
-          ...(ldblockshowResultForStudio
-            ? [{ id: "ldblockshow" as StudioView, title: "LD Block Review", subtitle: "Locus-level LD heatmap" }]
-            : []),
-          { id: "table", title: "Filtering View", subtitle: "Searchable variant triage" },
-          { id: "symbolic", title: "Symbolic ALT Review", subtitle: "Structural-style records split out" },
-          { id: "roh", title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" },
-          { id: "candidates", title: "Candidate Variants", subtitle: "Ranked review shortlist" },
-          { id: "vep", title: "VEP Consequence", subtitle: "Consequence and gene burden" },
-          { id: "clinvar", title: "ClinVar Review", subtitle: "Clinical significance mix" },
-          { id: "annotations", title: "Annotation Cards", subtitle: "Variant detail cards" },
-          { id: "igv", title: "IGV Plot", subtitle: "Locus visualization" },
-          { id: "acmg", title: "ACMG Review", subtitle: "Evidence hints, not final calls" },
-          { id: "references", title: "References", subtitle: "Linked evidence" },
-        ]
+      ? (() => {
+          const activeRenderer = studioDispatch?.renderer ?? analysis.studio?.renderer ?? null;
+          const hasAnnotations = (analysis.annotations?.length ?? 0) > 0;
+          const hasCandidates = (analysis.candidate_variants?.length ?? 0) > 0;
+          const hasRoh = (analysis.roh_segments?.length ?? 0) > 0;
+          const igvCard = igvUnlocked ? [{ id: "igv" as StudioView, title: "IGV Plot", subtitle: "Locus visualization" }] : [];
+          if (activeRenderer === "qc") {
+            return [
+              { id: "qc" as StudioView, title: "QC Summary", subtitle: "PASS, Ti/Tv, GT quality" },
+              ...(liftoverResultForStudio ? [{ id: "liftover" as StudioView, title: "LiftOver Review", subtitle: "Genome build conversion result" }] : []),
+              ...(snpeffResultForStudio ? [{ id: "snpeff" as StudioView, title: "SnpEff Review", subtitle: "Local effect annotation preview" }] : []),
+              ...(plinkResultForStudio ? [{ id: "plink" as StudioView, title: "PLINK", subtitle: "QC command runner and result review" }] : []),
+              ...(ldblockshowResultForStudio ? [{ id: "ldblockshow" as StudioView, title: "LD Block Review", subtitle: "Locus-level LD heatmap" }] : []),
+              ...(hasCandidates ? [{ id: "candidates" as StudioView, title: "Candidate Variants", subtitle: "Ranked review shortlist" }] : []),
+              ...(hasAnnotations ? [{ id: "annotations" as StudioView, title: "Annotation Cards", subtitle: "Variant detail cards" }] : []),
+              ...(hasRoh ? [{ id: "roh" as StudioView, title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" }] : []),
+              ...igvCard,
+            ];
+          }
+          if (activeRenderer === "candidates") {
+            return [
+              ...(hasCandidates ? [{ id: "candidates" as StudioView, title: "Candidate Variants", subtitle: "Ranked review shortlist" }] : []),
+              ...(hasAnnotations ? [{ id: "annotations" as StudioView, title: "Annotation Cards", subtitle: "Variant detail cards" }] : []),
+              ...(hasAnnotations ? [{ id: "vep" as StudioView, title: "VEP Consequence", subtitle: "Consequence and gene burden" }] : []),
+              ...(hasRoh ? [{ id: "roh" as StudioView, title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" }] : []),
+              { id: "table" as StudioView, title: "Filtering View", subtitle: "Searchable variant triage" },
+              ...igvCard,
+            ];
+          }
+          if (activeRenderer === "clinvar") {
+            return [
+              { id: "clinvar" as StudioView, title: "ClinVar Review", subtitle: "Clinical significance mix" },
+              { id: "vep" as StudioView, title: "VEP Consequence", subtitle: "Consequence and gene burden" },
+              { id: "coverage" as StudioView, title: "Clinical Coverage", subtitle: "Annotation completeness view" },
+              { id: "symbolic" as StudioView, title: "Symbolic ALT Review", subtitle: "Structural-style records split out" },
+              ...(hasRoh ? [{ id: "roh" as StudioView, title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" }] : []),
+              ...(hasCandidates ? [{ id: "candidates" as StudioView, title: "Candidate Variants", subtitle: "Ranked review shortlist" }] : []),
+              { id: "table" as StudioView, title: "Filtering View", subtitle: "Searchable variant triage" },
+              ...igvCard,
+            ];
+          }
+          return [
+            { id: "provenance" as StudioView, title: "Workflow Setup", subtitle: "Tools, scope, and run policy" },
+            { id: "qc" as StudioView, title: "QC Summary", subtitle: "PASS, Ti/Tv, GT quality" },
+            { id: "coverage" as StudioView, title: "Clinical Coverage", subtitle: "Annotation completeness view" },
+            { id: "snpeff" as StudioView, title: "SnpEff Review", subtitle: "Local effect annotation preview" },
+            { id: "plink" as StudioView, title: "PLINK", subtitle: "QC command runner and result review" },
+            ...(liftoverResultForStudio
+              ? [{ id: "liftover" as StudioView, title: "LiftOver Review", subtitle: "Genome build conversion result" }]
+              : []),
+            ...(ldblockshowResultForStudio
+              ? [{ id: "ldblockshow" as StudioView, title: "LD Block Review", subtitle: "Locus-level LD heatmap" }]
+              : []),
+            { id: "table" as StudioView, title: "Filtering View", subtitle: "Searchable variant triage" },
+            { id: "symbolic" as StudioView, title: "Symbolic ALT Review", subtitle: "Structural-style records split out" },
+            { id: "roh" as StudioView, title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" },
+            { id: "candidates" as StudioView, title: "Candidate Variants", subtitle: "Ranked review shortlist" },
+            { id: "vep" as StudioView, title: "VEP Consequence", subtitle: "Consequence and gene burden" },
+            { id: "clinvar" as StudioView, title: "ClinVar Review", subtitle: "Clinical significance mix" },
+            { id: "annotations" as StudioView, title: "Annotation Cards", subtitle: "Variant detail cards" },
+            { id: "igv" as StudioView, title: "IGV Plot", subtitle: "Locus visualization" },
+            { id: "acmg" as StudioView, title: "ACMG Review", subtitle: "Evidence hints, not final calls" },
+            { id: "references" as StudioView, title: "References", subtitle: "Linked evidence" },
+          ];
+        })()
       : [
           ...(samtoolsResultForStudio
             ? [{ id: "samtools" as StudioView, title: "Samtools Review", subtitle: "Alignment QC summary" }]
@@ -4506,7 +4612,7 @@ export default function Page() {
                   <h3>Tool Registry</h3>
                 </div>
                 <div className="sourceSectionBody">
-                <div className="toolRegistryDetails">
+                  <div className="toolRegistryDetails">
                     <button
                       type="button"
                       className="toolRegistrySummary"
