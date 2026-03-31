@@ -1230,7 +1230,7 @@ export default function Page() {
   const [latestPrsPrepResult, setLatestPrsPrepResult] = useState<PrsPrepResponse | null>(null);
   const [annotationScope, setAnnotationScope] = useState<"representative" | "all">("representative");
   const [annotationLimit, setAnnotationLimit] = useState("200");
-  const [status, setStatus] = useState("Waiting for a session mode");
+  const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
   const [selectedAnnotationIndex, setSelectedAnnotationIndex] = useState(0);
   const [annotationSearch, setAnnotationSearch] = useState("");
