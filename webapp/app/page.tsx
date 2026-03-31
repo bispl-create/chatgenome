@@ -3841,10 +3841,21 @@ export default function Page() {
 
   function activateStudioFromPayload(payload: Record<string, unknown> | null | undefined, fallbackView?: StudioView | null) {
     const dispatch = resolveStudioDispatchFromPayload(payload);
-    setStudioDispatch(dispatch);
+    // Only update studio dispatch when the payload carries explicit studio
+    // metadata (result_kind, requested_view, or studio.renderer).  Plain
+    // grounded-chat responses contain none of these — updating dispatch in
+    // that case would reset the renderer to null and show the full card
+    // fallback list.
+    const hasStudioIntent =
+      Boolean(dispatch.resultKind) ||
+      Boolean(dispatch.requestedView) ||
+      Boolean(dispatch.renderer);
+    if (hasStudioIntent) {
+      setStudioDispatch(dispatch);
+    }
     const resolvedView = resolveStudioRendererKey({
       activeView: fallbackView,
-      dispatch,
+      dispatch: hasStudioIntent ? dispatch : undefined,
     });
     if (resolvedView) {
       setActiveStudioView(resolvedView as StudioView);
