@@ -2245,9 +2245,6 @@ export default function Page() {
 
       const payload: RawQcResponse = await response.json();
       setRawQcAnalysis(payload);
-      setAnalysis(null);
-      setSpreadsheetAnalysis(null);
-      setTextAnalysis(null);
       activateStudioFromPayload({ requested_view: "rawqc" }, "rawqc");
       setStatus("Raw QC ready");
       setComposerText("");
@@ -2294,10 +2291,6 @@ export default function Page() {
 
       const payload: SummaryStatsResponse = await response.json();
       setSummaryStatsAnalysis(payload);
-      setAnalysis(null);
-      setRawQcAnalysis(null);
-      setSpreadsheetAnalysis(null);
-      setTextAnalysis(null);
       activateStudioFromPayload({ requested_view: "sumstats" }, "sumstats");
       setStatus("Summary stats ready");
       setComposerText("");
@@ -2342,10 +2335,6 @@ export default function Page() {
 
       const payload: TextSourceResponse = await response.json();
       setTextAnalysis(payload);
-      setSpreadsheetAnalysis(null);
-      setAnalysis(null);
-      setRawQcAnalysis(null);
-      setSummaryStatsAnalysis(null);
       activateStudioFromPayload({ requested_view: "text" }, "text");
       setStatus("Text review ready");
       setComposerText("");
@@ -2391,11 +2380,6 @@ export default function Page() {
 
       const payload: DicomSourceResponse = await response.json();
       setDicomAnalysis(payload);
-      setSpreadsheetAnalysis(null);
-      setTextAnalysis(null);
-      setAnalysis(null);
-      setRawQcAnalysis(null);
-      setSummaryStatsAnalysis(null);
       activateStudioFromPayload(payload, "dicom_review");
       setStatus("DICOM review ready");
       setComposerText("");
@@ -2441,10 +2425,6 @@ export default function Page() {
 
       const payload: SpreadsheetSourceResponse = await response.json();
       setSpreadsheetAnalysis(payload);
-      setTextAnalysis(null);
-      setAnalysis(null);
-      setRawQcAnalysis(null);
-      setSummaryStatsAnalysis(null);
       activateStudioFromPayload(payload, "cohort_browser");
       setStatus("Spreadsheet review ready");
       setComposerText("");
