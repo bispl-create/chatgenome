@@ -29,6 +29,8 @@ from app.models import (
     TextSourceResponse,
     TextChatRequest,
     TextChatResponse,
+    MultimodalChatRequest,
+    MultimodalChatResponse,
 )
 from app.models import (
     GatkLiftoverVcfRequest,
@@ -1637,3 +1639,216 @@ def answer_dicom_chat(payload: DicomChatRequest) -> DicomChatResponse:
 
 def answer_spreadsheet_chat(payload: SpreadsheetChatRequest) -> SpreadsheetChatResponse:
     return _answer_source_chat("spreadsheet", payload)
+
+
+def answer_multimodal_chat(payload: MultimodalChatRequest) -> MultimodalChatResponse:
+    """Handle chat with merged context from all active sources."""
+    # Determine primary source for @tool routing
+    primary = str(payload.primary_source_type or "").strip()
+
+    # For @tool requests, route to the primary source's handler
+    at_tool_request = _parse_at_tool_request(payload.question)
+    if at_tool_request:
+        source_type, single_payload = _multimodal_to_single(payload, primary or None)
+        if single_payload is not None:
+            try:
+                result = _handle_at_tool_request_for_source(source_type, single_payload, at_tool_request)
+                return _single_response_to_multimodal(result)
+            except Exception as exc:
+                alias = str(at_tool_request.get("alias") or "tool")
+                return MultimodalChatResponse(
+                    answer=f"`@{alias}` execution failed: {exc}",
+                    citations=[],
+                    used_fallback=True,
+                )
+        return MultimodalChatResponse(
+            answer="No active source to run this tool against.",
+            citations=[],
+            used_fallback=True,
+        )
+
+    if _needs_grounded_clarification(payload.question):
+        return MultimodalChatResponse(
+            answer=_grounded_clarification_text(),
+            citations=[],
+            used_fallback=False,
+        )
+
+    # For grounded/general chat, merge all source contexts into one prompt
+    try:
+        return _call_openai_multimodal(payload)
+    except Exception:
+        return MultimodalChatResponse(
+            answer=_fallback_chat_answer(primary or "vcf", payload.question).answer,
+            citations=[],
+            used_fallback=True,
+        )
+
+
+def _multimodal_to_single(
+    payload: MultimodalChatRequest,
+    preferred: str | None,
+) -> tuple[str, Any]:
+    """Extract a single-source payload from multimodal request for @tool routing."""
+    sources: dict[str, Any] = {}
+    if payload.vcf_analysis:
+        sources["vcf"] = AnalysisChatRequest(
+            question=payload.question, analysis=payload.vcf_analysis,
+            history=payload.history, studio_context=payload.studio_context,
+        )
+    if payload.raw_qc_analysis:
+        sources["raw_qc"] = RawQcChatRequest(
+            question=payload.question, analysis=payload.raw_qc_analysis,
+            history=payload.history, studio_context=payload.studio_context,
+        )
+    if payload.summary_stats_analysis:
+        sources["summary_stats"] = SummaryStatsChatRequest(
+            question=payload.question, analysis=payload.summary_stats_analysis,
+            history=payload.history, studio_context=payload.studio_context,
+        )
+    if payload.text_analysis:
+        sources["text"] = TextChatRequest(
+            question=payload.question, analysis=payload.text_analysis,
+            history=payload.history, studio_context=payload.studio_context,
+        )
+    if payload.dicom_analysis:
+        sources["dicom"] = DicomChatRequest(
+            question=payload.question, analysis=payload.dicom_analysis,
+            history=payload.history, studio_context=payload.studio_context,
+        )
+    if payload.spreadsheet_analysis:
+        sources["spreadsheet"] = SpreadsheetChatRequest(
+            question=payload.question, analysis=payload.spreadsheet_analysis,
+            history=payload.history, studio_context=payload.studio_context,
+        )
+    if preferred and preferred in sources:
+        return preferred, sources[preferred]
+    if sources:
+        key = next(iter(sources))
+        return key, sources[key]
+    return "vcf", None
+
+
+def _single_response_to_multimodal(resp: Any) -> MultimodalChatResponse:
+    """Convert any single-source chat response to MultimodalChatResponse."""
+    return MultimodalChatResponse(
+        source_type=getattr(resp, "source_type", None),
+        answer=resp.answer,
+        citations=resp.citations,
+        used_fallback=resp.used_fallback,
+        used_tools=getattr(resp, "used_tools", []),
+        result_kind=getattr(resp, "result_kind", None),
+        requested_view=getattr(resp, "requested_view", None),
+        studio=getattr(resp, "studio", None),
+        analysis=getattr(resp, "analysis", None),
+        plink_result=getattr(resp, "plink_result", None),
+        liftover_result=getattr(resp, "liftover_result", None),
+        ldblockshow_result=getattr(resp, "ldblockshow_result", None),
+        samtools_result=getattr(resp, "samtools_result", None),
+        qqman_result=getattr(resp, "qqman_result", None),
+        prs_prep_result=getattr(resp, "prs_prep_result", None),
+    )
+
+
+def _call_openai_multimodal(payload: MultimodalChatRequest) -> MultimodalChatResponse:
+    """Call OpenAI with merged context from all active sources."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+    if not api_key:
+        return MultimodalChatResponse(
+            answer=_fallback_chat_answer("vcf", payload.question).answer,
+            citations=[],
+            used_fallback=True,
+        )
+
+    grounded = _has_studio_trigger(payload.question)
+    context_sections: list[str] = []
+
+    # Gather compacted contexts from each active source
+    source_configs: list[tuple[str, Any]] = [
+        ("vcf", payload.vcf_analysis),
+        ("raw_qc", payload.raw_qc_analysis),
+        ("summary_stats", payload.summary_stats_analysis),
+        ("text", payload.text_analysis),
+        ("spreadsheet", payload.spreadsheet_analysis),
+        ("dicom", payload.dicom_analysis),
+    ]
+
+    for source_type, analysis_obj in source_configs:
+        if analysis_obj is None:
+            continue
+        config = CHAT_OPENAI_CONFIG.get(source_type)
+        if not config:
+            continue
+        # Build a lightweight single-source payload to reuse the compact builder
+        single = type("_P", (), {
+            "question": payload.question,
+            "analysis": analysis_obj,
+            "history": payload.history,
+            "studio_context": payload.studio_context,
+        })()
+        try:
+            compact = config["compact_context_builder"](single)
+            label = config["context_label"]
+            context_sections.append(f"{label} ({source_type}):\n{json.dumps(compact, ensure_ascii=False)}")
+        except Exception:
+            pass
+
+    if grounded and context_sections:
+        system_prompt = (
+            "You are a multimodal biomedical analysis copilot. "
+            "The user explicitly requested grounded reasoning via a trigger such as $studio or $current analysis. "
+            "Multiple source types are loaded simultaneously. "
+            "Answer from ALL provided contexts — cross-reference findings across modalities when relevant. "
+            "Do not invent facts not present in the provided contexts. "
+            "When possible, cite reference ids like REF1 or REF4 inline. "
+            "Format the answer in clean Markdown."
+        )
+        user_content = (
+            "Question:\n"
+            f"{payload.question}\n\n"
+            + "\n\n".join(context_sections)
+        )
+    elif grounded:
+        system_prompt = (
+            "You are a multimodal biomedical analysis copilot. "
+            "The user requested grounded reasoning but no analysis contexts are available yet. "
+            "Ask the user to upload source files first."
+        )
+        user_content = payload.question
+    else:
+        system_prompt = (
+            "You are a helpful general assistant. "
+            "The user did not request analysis grounding. "
+            "Answer from general knowledge only."
+        )
+        user_content = payload.question
+
+    history_lines = [{"role": turn.role, "content": turn.content} for turn in payload.history[-6:]]
+    body = {
+        "model": model,
+        "input": [
+            {"role": "system", "content": system_prompt},
+            *history_lines,
+            {"role": "user", "content": user_content},
+        ],
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=OPENAI_TIMEOUT_SECONDS) as response:
+        result = json.loads(response.read().decode("utf-8"))
+
+    output_text = _extract_openai_output_text(result)
+    citations = sorted(set(re.findall(r"\bREF\d+\b", output_text or "")))
+    return MultimodalChatResponse(
+        answer=output_text or "Could not generate a response.",
+        citations=citations,
+        used_fallback=False,
+    )

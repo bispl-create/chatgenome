@@ -54,6 +54,8 @@ from app.models import (
     TextChatRequest,
     TextChatResponse,
     TextSourceResponse,
+    MultimodalChatRequest,
+    MultimodalChatResponse,
     SourceFromPathRequest,
     ToolInfo,
     ToolRunRequest,
@@ -62,6 +64,7 @@ from app.models import (
 from app.services.chat import (
     answer_analysis_chat,
     answer_dicom_chat,
+    answer_multimodal_chat,
     answer_raw_qc_chat,
     answer_source_chat,
     answer_spreadsheet_chat,
@@ -592,6 +595,11 @@ def chat_about_dicom(request: DicomChatRequest) -> DicomChatResponse:
 @app.post("/api/v1/chat/spreadsheet", response_model=SpreadsheetChatResponse)
 def chat_about_spreadsheet(request: SpreadsheetChatRequest) -> SpreadsheetChatResponse:
     return answer_spreadsheet_chat(request)
+
+
+@app.post("/api/v1/chat/multimodal", response_model=MultimodalChatResponse)
+def chat_multimodal(request: MultimodalChatRequest) -> MultimodalChatResponse:
+    return answer_multimodal_chat(request)
 
 
 

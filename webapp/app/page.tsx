@@ -1510,67 +1510,47 @@ export default function Page() {
               ? "Uploading raw sequencing source..."
               : "Uploading VCF source...",
     );
+    // Multimodal: only clear the SAME source type being re-uploaded,
+    // keeping all other analyses intact for cross-source grounded chat.
     if (sessionMode === "prs" && slotRole === "prs_summary") {
       setSummaryStatsAnalysis(null);
       setDirectQqmanResult(null);
       setDirectPrsPrepResult(null);
       setLatestPrsPrepResult(null);
-      setDicomAnalysis(null);
-      setSpreadsheetAnalysis(null);
-      setTextAnalysis(null);
     } else if (sessionMode === "prs" && slotRole === "prs_target") {
       setAnalysis(null);
       setDirectLiftoverResult(null);
       setDirectPlinkResult(null);
       setDirectSnpeffResult(null);
       setDirectLdblockshowResult(null);
-      setDicomAnalysis(null);
-      setSpreadsheetAnalysis(null);
-      setTextAnalysis(null);
     } else if (guessedSourceType === "vcf") {
       setAnalysis(null);
       setDirectLiftoverResult(null);
       setDirectPlinkResult(null);
       setDirectSnpeffResult(null);
       setDirectLdblockshowResult(null);
-      setDicomAnalysis(null);
-      setSpreadsheetAnalysis(null);
-      setTextAnalysis(null);
     } else if (guessedSourceType === "raw_qc") {
       setRawQcAnalysis(null);
       setDirectSamtoolsResult(null);
-      setDicomAnalysis(null);
-      setSpreadsheetAnalysis(null);
-      setTextAnalysis(null);
     } else if (guessedSourceType === "summary_stats") {
       setSummaryStatsAnalysis(null);
       setDirectQqmanResult(null);
       setDirectPrsPrepResult(null);
       setLatestPrsPrepResult(null);
-      setDicomAnalysis(null);
-      setSpreadsheetAnalysis(null);
-      setTextAnalysis(null);
     } else if (guessedSourceType === "dicom") {
-      setAnalysis(null);
-      setRawQcAnalysis(null);
-      setSummaryStatsAnalysis(null);
       setDicomAnalysis(null);
-      setSpreadsheetAnalysis(null);
-      setTextAnalysis(null);
     } else if (guessedSourceType === "spreadsheet") {
-      setDicomAnalysis(null);
       setSpreadsheetAnalysis(null);
-      setTextAnalysis(null);
     } else if (guessedSourceType === "text") {
-      setDicomAnalysis(null);
       setTextAnalysis(null);
     }
     setFollowUpAnswer(null);
-    setAnalysisQa([]);
-    setActiveStudioView(null);
-    setIgvUnlocked(false);
-    setSelectedAnnotationIndex(0);
-    setAnnotationSearch("");
+    // Multimodal: preserve chat history and studio view across source uploads.
+    // Only reset annotation selection within the same source type.
+    if (guessedSourceType === "vcf") {
+      setSelectedAnnotationIndex(0);
+      setAnnotationSearch("");
+    }
     setError(null);
     try {
       if (guessedSourceType === "text") {
@@ -2608,8 +2588,6 @@ export default function Page() {
 
       const payload: AnalysisResponse = await response.json();
       setAnalysis(payload);
-      setSpreadsheetAnalysis(null);
-      setTextAnalysis(null);
       setFollowUpAnswer(null);
       setAnalysisQa([]);
       activateStudioFromPayload(payload);
@@ -2703,6 +2681,16 @@ export default function Page() {
       return;
     }
 
+    // Count active sources — use multimodal endpoint when >1 source is loaded
+    const activeSourceCount = [analysis, rawQcAnalysis, summaryStatsAnalysis, dicomAnalysis, spreadsheetAnalysis, textAnalysis].filter(Boolean).length;
+
+    if (activeSourceCount > 1) {
+      setComposerText("");
+      await handleAskMultimodalQuestion(text);
+      return;
+    }
+
+    // Single source fallback (legacy endpoints for backward compatibility)
     if (analysis) {
       setComposerText("");
       await handleAskAnalysisQuestion(text);
@@ -2742,7 +2730,7 @@ export default function Page() {
     addMessage({ role: "user", content: text });
     addMessage({
       role: "assistant",
-      content: "먼저 mode를 정하고 필요한 source를 업로드해 주세요.",
+      content: "소스 파일을 업로드해 주세요.",
     });
     setComposerText("");
   }
@@ -3155,6 +3143,76 @@ export default function Page() {
         ...current,
         { role: "assistant", content: `설명 요청 중 오류가 발생했습니다: ${msg}` },
       ]);
+      setStatus("Answer failed");
+    }
+  }
+
+  async function handleAskMultimodalQuestion(questionText?: string) {
+    const text = questionText?.trim() ?? "";
+    if (!text) return;
+
+    setStatus("Generating answer...");
+    addMessage({ role: "user", content: text });
+    setAnalysisQa((current) => [...current, { role: "user", content: text }]);
+
+    try {
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/v1/chat/multimodal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: text,
+          vcf_analysis: analysis ?? undefined,
+          raw_qc_analysis: rawQcAnalysis ?? undefined,
+          summary_stats_analysis: summaryStatsAnalysis ?? undefined,
+          text_analysis: textAnalysis ?? undefined,
+          spreadsheet_analysis: spreadsheetAnalysis ?? undefined,
+          dicom_analysis: dicomAnalysis ?? undefined,
+          primary_source_type: attachedSourceType,
+          history: analysisQa.map((turn) => ({ role: turn.role, content: turn.content })),
+          studio_context: studioContext,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = await response.json();
+      // Update analysis states if the response carries updated data
+      if (payload.analysis) {
+        setAnalysis(payload.analysis);
+      }
+      if (payload.plink_result) {
+        setAnalysis((current) =>
+          current ? { ...current, plink_result: payload.plink_result } : current,
+        );
+        activateStudioFromPayload({ ...payload, result_kind: "plink_result" }, "plink");
+      }
+      if (payload.liftover_result) {
+        setAnalysis((current) =>
+          current ? { ...current, liftover_result: payload.liftover_result } : current,
+        );
+        activateStudioFromPayload({ ...payload, result_kind: "liftover_result" }, "liftover");
+      }
+      if (payload.ldblockshow_result) {
+        setAnalysis((current) =>
+          current ? { ...current, ldblockshow_result: payload.ldblockshow_result } : current,
+        );
+        activateStudioFromPayload({ ...payload, result_kind: "ldblockshow_result" }, "ldblockshow");
+      }
+      if (payload.samtools_result) {
+        activateStudioFromPayload({ ...payload, result_kind: "samtools_result" }, "samtools");
+      }
+      activateStudioFromPayload(payload);
+      setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
+      addMessage({ role: "assistant", content: payload.answer });
+      setFollowUpAnswer(payload.answer);
+      setStatus("Answer ready");
+    } catch (caught) {
+      const msg = caught instanceof Error ? caught.message : String(caught);
+      setAnalysisQa((current) => [
+        ...current,
+        { role: "assistant", content: `설명 요청 중 오류가 발생했습니다: ${msg}` },
+      ]);
+      addMessage({ role: "assistant", content: `설명 요청 중 오류가 발생했습니다: ${msg}` });
       setStatus("Answer failed");
     }
   }
@@ -3636,136 +3694,133 @@ export default function Page() {
       ldblockshowResultForStudio ||
       samtoolsResultForStudio,
   );
-  const studioCards: Array<{ id: StudioView; title: string; subtitle: string }> = rawQcAnalysis
-    ? [
-        { id: "rawqc", title: "FastQC Review", subtitle: "Raw sequencing module summary" },
-        ...(samtoolsResultForStudio
-          ? [{ id: "samtools" as StudioView, title: "Samtools Review", subtitle: "Alignment QC summary" }]
-          : []),
-      ]
-    : summaryStatsAnalysis
-      ? [
-          { id: "sumstats" as StudioView, title: "Summary Stats Review", subtitle: "Post-GWAS intake and column mapping" },
-          ...(prsPrepResultForStudio
-            ? [{ id: "prs_prep" as StudioView, title: "PRS Prep Review", subtitle: "Build check, harmonization, and score-file readiness" }]
-            : []),
-          ...(qqmanResultForStudio
-            ? [{ id: "qqman" as StudioView, title: "qqman Plots", subtitle: "Manhattan and QQ visualization" }]
-            : []),
-        ]
-    : spreadsheetAnalysis
-      ? (
-          spreadsheetAnalysis.studio_cards?.length
-            ? spreadsheetAnalysis.studio_cards.map((card) => ({
-                id: String(card.id ?? card.base_id ?? "cohort_browser") as StudioView,
-                title: String(card.title ?? "Cohort Browser"),
-                subtitle: String(card.subtitle ?? "Sheet-level cohort overview and grid preview"),
-              }))
-            : [{ id: "cohort_browser" as StudioView, title: "Cohort Browser", subtitle: "Sheet-level cohort overview and grid preview" }]
-        )
-    : dicomAnalysis
-      ? [
-          ...(dicomAnalysis.studio_cards?.length
-            ? dicomAnalysis.studio_cards.map((card) => ({
-                id: String(card.id ?? "dicom_review") as StudioView,
-                title: String(card.title ?? "DICOM Review"),
-                subtitle: String(card.subtitle ?? "Metadata, preview, and series summary"),
-              }))
-            : [{ id: "dicom_review" as StudioView, title: "DICOM Review", subtitle: "Metadata, preview, and series summary" }])
-        ]
-    : textAnalysis
-      ? [
-          { id: "text" as StudioView, title: "Text Review", subtitle: "Preview and note-length summary" },
-        ]
-    : analysis
-      ? (() => {
-          const activeRenderer = studioDispatch?.renderer ?? analysis.studio?.renderer ?? null;
-          const hasAnnotations = (analysis.annotations?.length ?? 0) > 0;
-          const hasCandidates = (analysis.candidate_variants?.length ?? 0) > 0;
-          const hasRoh = (analysis.roh_segments?.length ?? 0) > 0;
-          const igvCard = igvUnlocked ? [{ id: "igv" as StudioView, title: "IGV Plot", subtitle: "Locus visualization" }] : [];
-          if (activeRenderer === "qc") {
-            return [
-              { id: "qc" as StudioView, title: "QC Summary", subtitle: "PASS, Ti/Tv, GT quality" },
-              ...(liftoverResultForStudio ? [{ id: "liftover" as StudioView, title: "LiftOver Review", subtitle: "Genome build conversion result" }] : []),
-              ...(snpeffResultForStudio ? [{ id: "snpeff" as StudioView, title: "SnpEff Review", subtitle: "Local effect annotation preview" }] : []),
-              ...(plinkResultForStudio ? [{ id: "plink" as StudioView, title: "PLINK", subtitle: "QC command runner and result review" }] : []),
-              ...(ldblockshowResultForStudio ? [{ id: "ldblockshow" as StudioView, title: "LD Block Review", subtitle: "Locus-level LD heatmap" }] : []),
-              ...(hasCandidates ? [{ id: "candidates" as StudioView, title: "Candidate Variants", subtitle: "Ranked review shortlist" }] : []),
-              ...(hasAnnotations ? [{ id: "annotations" as StudioView, title: "Annotation Cards", subtitle: "Variant detail cards" }] : []),
-              ...(hasRoh ? [{ id: "roh" as StudioView, title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" }] : []),
-              ...igvCard,
-            ];
-          }
-          if (activeRenderer === "candidates") {
-            return [
-              ...(hasCandidates ? [{ id: "candidates" as StudioView, title: "Candidate Variants", subtitle: "Ranked review shortlist" }] : []),
-              ...(hasAnnotations ? [{ id: "annotations" as StudioView, title: "Annotation Cards", subtitle: "Variant detail cards" }] : []),
-              ...(hasAnnotations ? [{ id: "vep" as StudioView, title: "VEP Consequence", subtitle: "Consequence and gene burden" }] : []),
-              ...(hasRoh ? [{ id: "roh" as StudioView, title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" }] : []),
-              { id: "table" as StudioView, title: "Filtering View", subtitle: "Searchable variant triage" },
-              ...igvCard,
-            ];
-          }
-          if (activeRenderer === "clinvar") {
-            return [
-              { id: "clinvar" as StudioView, title: "ClinVar Review", subtitle: "Clinical significance mix" },
-              { id: "vep" as StudioView, title: "VEP Consequence", subtitle: "Consequence and gene burden" },
-              { id: "coverage" as StudioView, title: "Clinical Coverage", subtitle: "Annotation completeness view" },
-              { id: "symbolic" as StudioView, title: "Symbolic ALT Review", subtitle: "Structural-style records split out" },
-              ...(hasRoh ? [{ id: "roh" as StudioView, title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" }] : []),
-              ...(hasCandidates ? [{ id: "candidates" as StudioView, title: "Candidate Variants", subtitle: "Ranked review shortlist" }] : []),
-              { id: "table" as StudioView, title: "Filtering View", subtitle: "Searchable variant triage" },
-              ...igvCard,
-            ];
-          }
-          return [
-            { id: "provenance" as StudioView, title: "Workflow Setup", subtitle: "Tools, scope, and run policy" },
-            { id: "qc" as StudioView, title: "QC Summary", subtitle: "PASS, Ti/Tv, GT quality" },
-            { id: "coverage" as StudioView, title: "Clinical Coverage", subtitle: "Annotation completeness view" },
-            { id: "snpeff" as StudioView, title: "SnpEff Review", subtitle: "Local effect annotation preview" },
-            { id: "plink" as StudioView, title: "PLINK", subtitle: "QC command runner and result review" },
-            ...(liftoverResultForStudio
-              ? [{ id: "liftover" as StudioView, title: "LiftOver Review", subtitle: "Genome build conversion result" }]
-              : []),
-            ...(ldblockshowResultForStudio
-              ? [{ id: "ldblockshow" as StudioView, title: "LD Block Review", subtitle: "Locus-level LD heatmap" }]
-              : []),
-            { id: "table" as StudioView, title: "Filtering View", subtitle: "Searchable variant triage" },
-            { id: "symbolic" as StudioView, title: "Symbolic ALT Review", subtitle: "Structural-style records split out" },
-            { id: "roh" as StudioView, title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" },
-            { id: "candidates" as StudioView, title: "Candidate Variants", subtitle: "Ranked review shortlist" },
-            { id: "vep" as StudioView, title: "VEP Consequence", subtitle: "Consequence and gene burden" },
-            { id: "clinvar" as StudioView, title: "ClinVar Review", subtitle: "Clinical significance mix" },
-            { id: "annotations" as StudioView, title: "Annotation Cards", subtitle: "Variant detail cards" },
-            { id: "igv" as StudioView, title: "IGV Plot", subtitle: "Locus visualization" },
-            { id: "acmg" as StudioView, title: "ACMG Review", subtitle: "Evidence hints, not final calls" },
-            { id: "references" as StudioView, title: "References", subtitle: "Linked evidence" },
-          ];
-        })()
-      : [
-          ...(samtoolsResultForStudio
-            ? [{ id: "samtools" as StudioView, title: "Samtools Review", subtitle: "Alignment QC summary" }]
-            : []),
-          ...(snpeffResultForStudio
-            ? [{ id: "snpeff" as StudioView, title: "SnpEff Review", subtitle: "Local effect annotation preview" }]
-            : []),
-          ...(plinkResultForStudio
-            ? [{ id: "plink" as StudioView, title: "PLINK", subtitle: "QC command runner and result review" }]
-            : []),
-          ...(liftoverResultForStudio
-          ? [{ id: "liftover" as StudioView, title: "LiftOver Review", subtitle: "Genome build conversion result" }]
-          : []),
-          ...(ldblockshowResultForStudio
-          ? [{ id: "ldblockshow" as StudioView, title: "LD Block Review", subtitle: "Locus-level LD heatmap" }]
-          : []),
-          ...(qqmanResultForStudio
-          ? [{ id: "qqman" as StudioView, title: "qqman Plots", subtitle: "Manhattan and QQ visualization" }]
-          : []),
-          ...(prsPrepResultForStudio
-          ? [{ id: "prs_prep" as StudioView, title: "PRS Prep Review", subtitle: "Build check, harmonization, and score-file readiness" }]
-          : []),
-        ];
+  // Multimodal: accumulate studio cards from ALL active sources.
+  const studioCards: Array<{ id: StudioView; title: string; subtitle: string }> = (() => {
+    const cards: Array<{ id: StudioView; title: string; subtitle: string }> = [];
+
+    // VCF analysis cards
+    if (analysis) {
+      const activeRenderer = studioDispatch?.renderer ?? analysis.studio?.renderer ?? null;
+      const hasAnnotations = (analysis.annotations?.length ?? 0) > 0;
+      const hasCandidates = (analysis.candidate_variants?.length ?? 0) > 0;
+      const hasRoh = (analysis.roh_segments?.length ?? 0) > 0;
+      const igvCard = igvUnlocked ? [{ id: "igv" as StudioView, title: "IGV Plot", subtitle: "Locus visualization" }] : [];
+      if (activeRenderer === "qc") {
+        cards.push(
+          { id: "qc" as StudioView, title: "QC Summary", subtitle: "PASS, Ti/Tv, GT quality" },
+          ...(liftoverResultForStudio ? [{ id: "liftover" as StudioView, title: "LiftOver Review", subtitle: "Genome build conversion result" }] : []),
+          ...(snpeffResultForStudio ? [{ id: "snpeff" as StudioView, title: "SnpEff Review", subtitle: "Local effect annotation preview" }] : []),
+          ...(plinkResultForStudio ? [{ id: "plink" as StudioView, title: "PLINK", subtitle: "QC command runner and result review" }] : []),
+          ...(ldblockshowResultForStudio ? [{ id: "ldblockshow" as StudioView, title: "LD Block Review", subtitle: "Locus-level LD heatmap" }] : []),
+          ...(hasCandidates ? [{ id: "candidates" as StudioView, title: "Candidate Variants", subtitle: "Ranked review shortlist" }] : []),
+          ...(hasAnnotations ? [{ id: "annotations" as StudioView, title: "Annotation Cards", subtitle: "Variant detail cards" }] : []),
+          ...(hasRoh ? [{ id: "roh" as StudioView, title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" }] : []),
+          ...igvCard,
+        );
+      } else if (activeRenderer === "candidates") {
+        cards.push(
+          ...(hasCandidates ? [{ id: "candidates" as StudioView, title: "Candidate Variants", subtitle: "Ranked review shortlist" }] : []),
+          ...(hasAnnotations ? [{ id: "annotations" as StudioView, title: "Annotation Cards", subtitle: "Variant detail cards" }] : []),
+          ...(hasAnnotations ? [{ id: "vep" as StudioView, title: "VEP Consequence", subtitle: "Consequence and gene burden" }] : []),
+          ...(hasRoh ? [{ id: "roh" as StudioView, title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" }] : []),
+          { id: "table" as StudioView, title: "Filtering View", subtitle: "Searchable variant triage" },
+          ...igvCard,
+        );
+      } else if (activeRenderer === "clinvar") {
+        cards.push(
+          { id: "clinvar" as StudioView, title: "ClinVar Review", subtitle: "Clinical significance mix" },
+          { id: "vep" as StudioView, title: "VEP Consequence", subtitle: "Consequence and gene burden" },
+          { id: "coverage" as StudioView, title: "Clinical Coverage", subtitle: "Annotation completeness view" },
+          { id: "symbolic" as StudioView, title: "Symbolic ALT Review", subtitle: "Structural-style records split out" },
+          ...(hasRoh ? [{ id: "roh" as StudioView, title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" }] : []),
+          ...(hasCandidates ? [{ id: "candidates" as StudioView, title: "Candidate Variants", subtitle: "Ranked review shortlist" }] : []),
+          { id: "table" as StudioView, title: "Filtering View", subtitle: "Searchable variant triage" },
+          ...igvCard,
+        );
+      } else {
+        cards.push(
+          { id: "qc" as StudioView, title: "QC Summary", subtitle: "PASS, Ti/Tv, GT quality" },
+          ...(liftoverResultForStudio ? [{ id: "liftover" as StudioView, title: "LiftOver Review", subtitle: "Genome build conversion result" }] : []),
+          ...(snpeffResultForStudio ? [{ id: "snpeff" as StudioView, title: "SnpEff Review", subtitle: "Local effect annotation preview" }] : []),
+          ...(plinkResultForStudio ? [{ id: "plink" as StudioView, title: "PLINK", subtitle: "QC command runner and result review" }] : []),
+          ...(ldblockshowResultForStudio ? [{ id: "ldblockshow" as StudioView, title: "LD Block Review", subtitle: "Locus-level LD heatmap" }] : []),
+          ...(hasCandidates ? [{ id: "candidates" as StudioView, title: "Candidate Variants", subtitle: "Ranked review shortlist" }] : []),
+          ...(hasAnnotations ? [{ id: "annotations" as StudioView, title: "Annotation Cards", subtitle: "Variant detail cards" }] : []),
+          ...(hasRoh ? [{ id: "roh" as StudioView, title: "ROH / Recessive", subtitle: "Hom-alt and ROH-style review" }] : []),
+          ...igvCard,
+        );
+      }
+    }
+
+    // Raw QC cards
+    if (rawQcAnalysis) {
+      cards.push({ id: "rawqc", title: "FastQC Review", subtitle: "Raw sequencing module summary" });
+      if (samtoolsResultForStudio) {
+        cards.push({ id: "samtools" as StudioView, title: "Samtools Review", subtitle: "Alignment QC summary" });
+      }
+    }
+
+    // Summary stats cards
+    if (summaryStatsAnalysis) {
+      cards.push({ id: "sumstats" as StudioView, title: "Summary Stats Review", subtitle: "Post-GWAS intake and column mapping" });
+      if (prsPrepResultForStudio) {
+        cards.push({ id: "prs_prep" as StudioView, title: "PRS Prep Review", subtitle: "Build check, harmonization, and score-file readiness" });
+      }
+      if (qqmanResultForStudio) {
+        cards.push({ id: "qqman" as StudioView, title: "qqman Plots", subtitle: "Manhattan and QQ visualization" });
+      }
+    }
+
+    // Spreadsheet cards
+    if (spreadsheetAnalysis) {
+      if (spreadsheetAnalysis.studio_cards?.length) {
+        spreadsheetAnalysis.studio_cards.forEach((card) => {
+          cards.push({
+            id: String(card.id ?? card.base_id ?? "cohort_browser") as StudioView,
+            title: String(card.title ?? "Cohort Browser"),
+            subtitle: String(card.subtitle ?? "Sheet-level cohort overview and grid preview"),
+          });
+        });
+      } else {
+        cards.push({ id: "cohort_browser" as StudioView, title: "Cohort Browser", subtitle: "Sheet-level cohort overview and grid preview" });
+      }
+    }
+
+    // DICOM cards
+    if (dicomAnalysis) {
+      if (dicomAnalysis.studio_cards?.length) {
+        dicomAnalysis.studio_cards.forEach((card) => {
+          cards.push({
+            id: String(card.id ?? "dicom_review") as StudioView,
+            title: String(card.title ?? "DICOM Review"),
+            subtitle: String(card.subtitle ?? "Metadata, preview, and series summary"),
+          });
+        });
+      } else {
+        cards.push({ id: "dicom_review" as StudioView, title: "DICOM Review", subtitle: "Metadata, preview, and series summary" });
+      }
+    }
+
+    // Text cards
+    if (textAnalysis) {
+      cards.push({ id: "text" as StudioView, title: "Text Review", subtitle: "Preview and note-length summary" });
+    }
+
+    // Orphan direct tool results (no parent analysis loaded)
+    if (!analysis && !rawQcAnalysis) {
+      if (samtoolsResultForStudio) cards.push({ id: "samtools" as StudioView, title: "Samtools Review", subtitle: "Alignment QC summary" });
+      if (snpeffResultForStudio) cards.push({ id: "snpeff" as StudioView, title: "SnpEff Review", subtitle: "Local effect annotation preview" });
+      if (plinkResultForStudio) cards.push({ id: "plink" as StudioView, title: "PLINK", subtitle: "QC command runner and result review" });
+      if (liftoverResultForStudio) cards.push({ id: "liftover" as StudioView, title: "LiftOver Review", subtitle: "Genome build conversion result" });
+      if (ldblockshowResultForStudio) cards.push({ id: "ldblockshow" as StudioView, title: "LD Block Review", subtitle: "Locus-level LD heatmap" });
+    }
+    if (!summaryStatsAnalysis) {
+      if (qqmanResultForStudio) cards.push({ id: "qqman" as StudioView, title: "qqman Plots", subtitle: "Manhattan and QQ visualization" });
+      if (prsPrepResultForStudio) cards.push({ id: "prs_prep" as StudioView, title: "PRS Prep Review", subtitle: "Build check, harmonization, and score-file readiness" });
+    }
+
+    return cards;
+  })();
   const externalStudioRendererRegistry = buildStudioRendererRegistry({
     apiBase,
     activeStudioView,

@@ -497,6 +497,28 @@ class SourceReadyResponse(BaseModel):
     file_kind: Optional[str] = None
 
 
+class MultimodalChatRequest(BaseChatRequest):
+    """Chat request that can carry context from multiple source types."""
+    vcf_analysis: Optional[AnalysisResponse] = None
+    raw_qc_analysis: Optional[RawQcResponse] = None
+    summary_stats_analysis: Optional[SummaryStatsResponse] = None
+    text_analysis: Optional[TextSourceResponse] = None
+    spreadsheet_analysis: Optional[SpreadsheetSourceResponse] = None
+    dicom_analysis: Optional[DicomSourceResponse] = None
+    primary_source_type: Optional[str] = None
+
+
+class MultimodalChatResponse(BaseChatResponse):
+    """Chat response for multimodal sessions."""
+    analysis: Optional[AnalysisResponse] = None
+    plink_result: Optional[PlinkResponse] = None
+    liftover_result: Optional[GatkLiftoverVcfResponse] = None
+    ldblockshow_result: Optional[LDBlockShowResponse] = None
+    samtools_result: Optional[SamtoolsResponse] = None
+    qqman_result: Optional[RPlotResponse] = None
+    prs_prep_result: Optional[PrsPrepResponse] = None
+
+
 class SourceChatRequest(BaseModel):
     source_type: Literal["vcf", "raw_qc", "summary_stats", "text", "spreadsheet", "dicom"]
     question: str
