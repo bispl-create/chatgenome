@@ -2819,7 +2819,6 @@ export default function Page() {
       const payload: AnalysisResponse = await response.json();
       setAnalysis(payload);
       setFollowUpAnswer(null);
-      setAnalysisQa([]);
       activateStudioFromPayload(payload, undefined, "vcf");
       setSelectedAnnotationIndex(0);
       setComposerText("");
@@ -3831,10 +3830,7 @@ export default function Page() {
   const messageTurns = messages
     .filter((message) => message.kind !== "status")
     .map((message) => ({ role: message.role, content: message.content }));
-  const chatTurns =
-    messageTurns.length === 0 && analysisQa.length === 0
-      ? [...summaryTurn]
-      : [...messageTurns, ...analysisQa];
+  const chatTurns = [...messageTurns, ...summaryTurn, ...analysisQa];
   const qcMetrics = analysis?.facts.qc ?? null;
   const clinvarCounts = useMemo(() => {
     if (!analysis) {
