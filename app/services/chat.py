@@ -427,17 +427,29 @@ def _flatten_studio_context(studio_context: dict) -> dict[str, object]:
         base = studio_context.model_dump(exclude_none=True)
         extra = getattr(studio_context, "model_extra", None) or {}
         studio_context = {**base, **extra}
+    # In multimodal mode, VCF-specific keys live inside extra (not top-level).
+    # Fall back to extra for keys not found at the top level.
+    extra_dict = studio_context.get("extra") or {}
+    if not isinstance(extra_dict, dict):
+        extra_dict = {}
+
+    def _get(key: str) -> object:
+        val = studio_context.get(key)
+        if val is not None:
+            return val
+        return extra_dict.get(key)
+
     flattened = {
         "active_view": studio_context.get("active_view"),
-        "qc_summary": studio_context.get("qc_summary"),
-        "clinical_coverage": studio_context.get("clinical_coverage"),
-        "symbolic_alt_review": studio_context.get("symbolic_alt_review"),
-        "roh_review": studio_context.get("roh_review"),
-        "candidate_variants": studio_context.get("candidate_variants"),
-        "clinvar_review": studio_context.get("clinvar_review"),
-        "vep_consequence": studio_context.get("vep_consequence"),
-        "snpeff_preview": studio_context.get("snpeff_preview"),
-        "selected_annotation": studio_context.get("selected_annotation"),
+        "qc_summary": _get("qc_summary"),
+        "clinical_coverage": _get("clinical_coverage"),
+        "symbolic_alt_review": _get("symbolic_alt_review"),
+        "roh_review": _get("roh_review"),
+        "candidate_variants": _get("candidate_variants"),
+        "clinvar_review": _get("clinvar_review"),
+        "vep_consequence": _get("vep_consequence"),
+        "snpeff_preview": _get("snpeff_preview"),
+        "selected_annotation": _get("selected_annotation"),
     }
     for key in (
         "current_card",
@@ -1793,7 +1805,11 @@ def _call_openai_multimodal(payload: MultimodalChatRequest) -> MultimodalChatRes
             )
             compact = config["compact_context_builder"](single)
             label = config["context_label"]
-            context_sections.append(f"{label} ({source_type}):\n{json.dumps(compact, ensure_ascii=False)}")
+            section_json = json.dumps(compact, ensure_ascii=False)
+            # Cap each source section to ~8k chars to keep total payload manageable
+            if len(section_json) > 8000:
+                section_json = section_json[:8000] + "..."
+            context_sections.append(f"{label} ({source_type}):\n{section_json}")
         except Exception as e:
             context_sections.append(f"[{source_type} context build failed: {e}]")
 
@@ -1802,7 +1818,8 @@ def _call_openai_multimodal(payload: MultimodalChatRequest) -> MultimodalChatRes
             "You are a multimodal biomedical analysis copilot. "
             "The user explicitly requested grounded reasoning via a trigger such as $studio or $current analysis. "
             "Multiple source types are loaded simultaneously. "
-            "Answer from ALL provided contexts — cross-reference findings across modalities when relevant. "
+            "Answer by synthesizing ALL provided source contexts together — cross-reference and summarize findings across all modalities. "
+            "Every loaded source is equally important; do not ignore any source context. "
             "Do not invent facts not present in the provided contexts. "
             "When possible, cite reference ids like REF1 or REF4 inline. "
             "Format the answer in clean Markdown."
@@ -1827,6 +1844,11 @@ def _call_openai_multimodal(payload: MultimodalChatRequest) -> MultimodalChatRes
         )
         user_content = payload.question
 
+    # Truncate user_content to avoid exceeding token limits
+    max_chars = 40_000
+    if len(user_content) > max_chars:
+        user_content = user_content[:max_chars] + "\n\n[... context truncated for length ...]"
+
     history_lines = [{"role": turn.role, "content": turn.content} for turn in payload.history[-6:]]
     body = {
         "model": model,
@@ -1836,12 +1858,6 @@ def _call_openai_multimodal(payload: MultimodalChatRequest) -> MultimodalChatRes
             {"role": "user", "content": user_content},
         ],
     }
-    # Truncate user_content to avoid exceeding token limits
-    max_chars = 60_000
-    if len(user_content) > max_chars:
-        user_content = user_content[:max_chars] + "\n\n[... context truncated for length ...]"
-
-    body["input"][-1]["content"] = user_content
 
     request = urllib.request.Request(
         "https://api.openai.com/v1/responses",

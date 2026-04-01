@@ -1240,6 +1240,7 @@ export default function Page() {
   const [followUpAnswer, setFollowUpAnswer] = useState<string | null>(null);
   const [activeStudioView, setActiveStudioView] = useState<StudioView | null>(null);
   const [studioDispatch, setStudioDispatch] = useState<StudioRendererDispatch>({});
+  const [sourceRenderers, setSourceRenderers] = useState<Record<string, StudioRendererDispatch>>({});
   const [igvUnlocked, setIgvUnlocked] = useState(false);
   const [plinkRunning, setPlinkRunning] = useState(false);
   const [plinkConfig, setPlinkConfig] = useState({
@@ -1849,7 +1850,7 @@ export default function Page() {
       const toolResult = (await response.json()) as ToolRunResponse;
       const facts = toolResult.result?.facts;
       setAnalysis((current) => current ? { ...current, facts: facts ?? current.facts } : current);
-      activateStudioFromPayload({ studio: { renderer: "qc" }, requested_view: "qc" });
+      activateStudioFromPayload({ studio: { renderer: "qc" }, requested_view: "qc" }, undefined, "vcf");
       setStatus("VCF QC complete");
       addMessage({
         role: "assistant",
@@ -1875,7 +1876,7 @@ export default function Page() {
       }
       const payload = (await response.json()) as AnalysisResponse["liftover_result"];
       setDirectLiftoverResult(payload ?? null);
-      activateStudioFromPayload({ result_kind: "liftover_result" }, "liftover");
+      activateStudioFromPayload({ result_kind: "liftover_result" }, "liftover", "vcf");
       setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
@@ -1903,7 +1904,7 @@ export default function Page() {
       }
       const payload = (await response.json()) as RawQcResponse["samtools_result"];
       setDirectSamtoolsResult(payload ?? null);
-      activateStudioFromPayload({ result_kind: "samtools_result" }, "samtools");
+      activateStudioFromPayload({ result_kind: "samtools_result" }, "samtools", "raw_qc");
       setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
@@ -1966,7 +1967,7 @@ export default function Page() {
       }
       const payload = (await response.json()) as AnalysisResponse["plink_result"];
       setDirectPlinkResult(payload ?? null);
-      activateStudioFromPayload({ result_kind: "plink_result" }, "plink");
+      activateStudioFromPayload({ result_kind: "plink_result" }, "plink", "vcf");
       setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
@@ -1998,7 +1999,7 @@ export default function Page() {
       }
       const payload = await response.json();
       setDirectSnpeffResult(payload ?? null);
-      activateStudioFromPayload({ result_kind: "snpeff_result" }, "snpeff");
+      activateStudioFromPayload({ result_kind: "snpeff_result" }, "snpeff", "vcf");
       setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
@@ -2060,7 +2061,7 @@ export default function Page() {
           tool_registry: current?.tool_registry ?? toolRegistry ?? [],
         };
       });
-      activateStudioFromPayload({ requested_view: "candidates", studio: { renderer: "candidates" } }, "candidates");
+      activateStudioFromPayload({ requested_view: "candidates", studio: { renderer: "candidates" } }, "candidates", "vcf");
       setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
@@ -2119,7 +2120,7 @@ export default function Page() {
             }
           : current,
       );
-      activateStudioFromPayload({ requested_view: "clinvar", studio: { renderer: "clinvar" } }, "clinvar");
+      activateStudioFromPayload({ requested_view: "clinvar", studio: { renderer: "clinvar" } }, "clinvar", "vcf");
       setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
@@ -2167,7 +2168,7 @@ export default function Page() {
       }
       const payload = await response.json();
       setDirectLdblockshowResult(payload ?? null);
-      activateStudioFromPayload({ result_kind: "ldblockshow_result" }, "ldblockshow");
+      activateStudioFromPayload({ result_kind: "ldblockshow_result" }, "ldblockshow", "vcf");
       setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
@@ -2194,7 +2195,7 @@ export default function Page() {
       }
       const payload = (await response.json()) as RPlotResponse;
       setDirectQqmanResult(payload);
-      activateStudioFromPayload({ result_kind: "qqman_result" }, "qqman");
+      activateStudioFromPayload({ result_kind: "qqman_result" }, "qqman", "summary_stats");
       setStatus(toolReadyStatus(alias, remainder));
       addMessage({
         role: "assistant",
@@ -2245,7 +2246,7 @@ export default function Page() {
 
       const payload: RawQcResponse = await response.json();
       setRawQcAnalysis(payload);
-      activateStudioFromPayload({ requested_view: "rawqc" }, "rawqc");
+      activateStudioFromPayload({ requested_view: "rawqc" }, "rawqc", "raw_qc");
       setStatus("Raw QC ready");
       setComposerText("");
       return payload;
@@ -2291,7 +2292,7 @@ export default function Page() {
 
       const payload: SummaryStatsResponse = await response.json();
       setSummaryStatsAnalysis(payload);
-      activateStudioFromPayload({ requested_view: "sumstats" }, "sumstats");
+      activateStudioFromPayload({ requested_view: "sumstats" }, "sumstats", "summary_stats");
       setStatus("Summary stats ready");
       setComposerText("");
       return payload;
@@ -2335,7 +2336,7 @@ export default function Page() {
 
       const payload: TextSourceResponse = await response.json();
       setTextAnalysis(payload);
-      activateStudioFromPayload({ requested_view: "text" }, "text");
+      activateStudioFromPayload({ requested_view: "text" }, "text", "text");
       setStatus("Text review ready");
       setComposerText("");
       return payload;
@@ -2380,7 +2381,7 @@ export default function Page() {
 
       const payload: DicomSourceResponse = await response.json();
       setDicomAnalysis(payload);
-      activateStudioFromPayload(payload, "dicom_review");
+      activateStudioFromPayload(payload, "dicom_review", "dicom");
       setStatus("DICOM review ready");
       setComposerText("");
       return payload;
@@ -2425,7 +2426,7 @@ export default function Page() {
 
       const payload: SpreadsheetSourceResponse = await response.json();
       setSpreadsheetAnalysis(payload);
-      activateStudioFromPayload(payload, "cohort_browser");
+      activateStudioFromPayload(payload, "cohort_browser", "spreadsheet");
       setStatus("Spreadsheet review ready");
       setComposerText("");
       return payload;
@@ -2468,7 +2469,7 @@ export default function Page() {
       const payload: PrsPrepResponse = await response.json();
       setDirectPrsPrepResult(payload);
       setLatestPrsPrepResult(payload);
-      activateStudioFromPayload({ requested_view: "prs_prep", result_kind: "prs_prep_result" }, "prs_prep");
+      activateStudioFromPayload({ requested_view: "prs_prep", result_kind: "prs_prep_result" }, "prs_prep", "summary_stats");
       setStatus("PRS prep ready");
       setComposerText("");
       addMessage({
@@ -2570,7 +2571,7 @@ export default function Page() {
       setAnalysis(payload);
       setFollowUpAnswer(null);
       setAnalysisQa([]);
-      activateStudioFromPayload(payload);
+      activateStudioFromPayload(payload, undefined, "vcf");
       setSelectedAnnotationIndex(0);
       setComposerText("");
       setStatus("Analysis ready");
@@ -2744,7 +2745,7 @@ export default function Page() {
         setAnalysis(payload.analysis);
       }
       setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
-      activateStudioFromPayload(payload);
+      activateStudioFromPayload(payload, undefined, "vcf");
       if (payload.plink_result) {
         setAnalysis((current) =>
           current
@@ -2755,7 +2756,7 @@ export default function Page() {
               }
             : current,
         );
-        activateStudioFromPayload({ ...payload, result_kind: "plink_result" }, "plink");
+        activateStudioFromPayload({ ...payload, result_kind: "plink_result" }, "plink", "vcf");
       }
       if (payload.liftover_result) {
         setAnalysis((current) =>
@@ -2767,7 +2768,7 @@ export default function Page() {
               }
             : current,
         );
-        activateStudioFromPayload({ ...payload, result_kind: "liftover_result" }, "liftover");
+        activateStudioFromPayload({ ...payload, result_kind: "liftover_result" }, "liftover", "vcf");
       }
       if (payload.ldblockshow_result) {
         setAnalysis((current) =>
@@ -2779,7 +2780,7 @@ export default function Page() {
               }
             : current,
         );
-        activateStudioFromPayload({ ...payload, result_kind: "ldblockshow_result" }, "ldblockshow");
+        activateStudioFromPayload({ ...payload, result_kind: "ldblockshow_result" }, "ldblockshow", "vcf");
       }
       setFollowUpAnswer(payload.answer);
       setStatus("Answer ready");
@@ -2845,7 +2846,7 @@ export default function Page() {
       if (!analysis) {
         setDirectPlinkResult(payload ?? null);
       }
-      activateStudioFromPayload({ result_kind: "plink_result" }, "plink");
+      activateStudioFromPayload({ result_kind: "plink_result" }, "plink", "vcf");
       setStatus("PLINK ready");
     } catch (caught) {
       const msg = caught instanceof Error ? caught.message : String(caught);
@@ -2935,9 +2936,9 @@ export default function Page() {
               }
             : current,
         );
-        activateStudioFromPayload({ ...payload, result_kind: "samtools_result" }, "samtools");
+        activateStudioFromPayload({ ...payload, result_kind: "samtools_result" }, "samtools", "raw_qc");
       } else if (payload.requested_view) {
-        activateStudioFromPayload(payload);
+        activateStudioFromPayload(payload, undefined, "raw_qc");
       }
       setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
       setFollowUpAnswer(payload.answer);
@@ -2987,7 +2988,7 @@ export default function Page() {
           current ? { ...current, prs_prep_result: payload.prs_prep_result ?? null } : current,
         );
       }
-      activateStudioFromPayload(payload);
+      activateStudioFromPayload(payload, undefined, "summary_stats");
       setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
       setFollowUpAnswer(payload.answer);
       setStatus("Answer ready");
@@ -3029,7 +3030,7 @@ export default function Page() {
       if (payload.analysis) {
         setTextAnalysis(payload.analysis);
       }
-      activateStudioFromPayload(payload, "text");
+      activateStudioFromPayload(payload, "text", "text");
       setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
       setFollowUpAnswer(payload.answer);
       setStatus("Answer ready");
@@ -3071,7 +3072,7 @@ export default function Page() {
       if (payload.analysis) {
         setDicomAnalysis(payload.analysis);
       }
-      activateStudioFromPayload(payload, "dicom_review");
+      activateStudioFromPayload(payload, "dicom_review", "dicom");
       setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
       setFollowUpAnswer(payload.answer);
       setStatus("Answer ready");
@@ -3113,7 +3114,7 @@ export default function Page() {
       if (payload.analysis) {
         setSpreadsheetAnalysis(payload.analysis);
       }
-      activateStudioFromPayload(payload, "cohort_browser");
+      activateStudioFromPayload(payload, "cohort_browser", "spreadsheet");
       setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
       setFollowUpAnswer(payload.answer);
       setStatus("Answer ready");
@@ -3132,7 +3133,6 @@ export default function Page() {
     if (!text) return;
 
     setStatus("Generating answer...");
-    addMessage({ role: "user", content: text });
     setAnalysisQa((current) => [...current, { role: "user", content: text }]);
 
     try {
@@ -3147,7 +3147,19 @@ export default function Page() {
           text_analysis: textAnalysis ?? undefined,
           spreadsheet_analysis: spreadsheetAnalysis ?? undefined,
           dicom_analysis: dicomAnalysis ?? undefined,
-          primary_source_type: attachedSourceType,
+          primary_source_type: (() => {
+            // Infer focused source from active studio view
+            const v = activeStudioView ?? "";
+            if (typeof v === "string") {
+              if (v.includes("cohort_browser") || v.startsWith("sheet::")) return "spreadsheet";
+              if (v === "dicom_review" || v.startsWith("dicom")) return "dicom";
+              if (v === "rawqc" || v === "samtools") return "raw_qc";
+              if (v === "sumstats" || v === "qqman" || v === "prs_prep") return "summary_stats";
+              if (v === "text") return "text";
+              if (["qc", "candidates", "clinvar", "annotations", "roh", "vep", "coverage", "symbolic", "table", "liftover", "snpeff", "plink", "ldblockshow", "igv"].includes(v)) return "vcf";
+            }
+            return attachedSourceType;
+          })(),
           history: analysisQa.map((turn) => ({ role: turn.role, content: turn.content })),
           studio_context: studioContext,
         }),
@@ -3164,26 +3176,25 @@ export default function Page() {
         setAnalysis((current) =>
           current ? { ...current, plink_result: payload.plink_result } : current,
         );
-        activateStudioFromPayload({ ...payload, result_kind: "plink_result" }, "plink");
+        activateStudioFromPayload({ ...payload, result_kind: "plink_result" }, "plink", "vcf");
       }
       if (payload.liftover_result) {
         setAnalysis((current) =>
           current ? { ...current, liftover_result: payload.liftover_result } : current,
         );
-        activateStudioFromPayload({ ...payload, result_kind: "liftover_result" }, "liftover");
+        activateStudioFromPayload({ ...payload, result_kind: "liftover_result" }, "liftover", "vcf");
       }
       if (payload.ldblockshow_result) {
         setAnalysis((current) =>
           current ? { ...current, ldblockshow_result: payload.ldblockshow_result } : current,
         );
-        activateStudioFromPayload({ ...payload, result_kind: "ldblockshow_result" }, "ldblockshow");
+        activateStudioFromPayload({ ...payload, result_kind: "ldblockshow_result" }, "ldblockshow", "vcf");
       }
       if (payload.samtools_result) {
-        activateStudioFromPayload({ ...payload, result_kind: "samtools_result" }, "samtools");
+        activateStudioFromPayload({ ...payload, result_kind: "samtools_result" }, "samtools", "raw_qc");
       }
       activateStudioFromPayload(payload);
       setAnalysisQa((current) => [...current, { role: "assistant", content: payload.answer }]);
-      addMessage({ role: "assistant", content: payload.answer });
       setFollowUpAnswer(payload.answer);
       setStatus("Answer ready");
     } catch (caught) {
@@ -3192,7 +3203,6 @@ export default function Page() {
         ...current,
         { role: "assistant", content: `설명 요청 중 오류가 발생했습니다: ${msg}` },
       ]);
-      addMessage({ role: "assistant", content: `설명 요청 중 오류가 발생했습니다: ${msg}` });
       setStatus("Answer failed");
     }
   }
@@ -3680,7 +3690,7 @@ export default function Page() {
 
     // VCF analysis cards
     if (analysis) {
-      const activeRenderer = studioDispatch?.renderer ?? analysis.studio?.renderer ?? null;
+      const activeRenderer = sourceRenderers.vcf?.renderer ?? studioDispatch?.renderer ?? analysis.studio?.renderer ?? null;
       const hasAnnotations = (analysis.annotations?.length ?? 0) > 0;
       const hasCandidates = (analysis.candidate_variants?.length ?? 0) > 0;
       const hasRoh = (analysis.roh_segments?.length ?? 0) > 0;
@@ -3874,7 +3884,7 @@ export default function Page() {
   });
   const registeredStudioRenderer = resolvedStudioRendererKey ? externalStudioRendererRegistry[resolvedStudioRendererKey] : null;
 
-  function activateStudioFromPayload(payload: Record<string, unknown> | null | undefined, fallbackView?: StudioView | null) {
+  function activateStudioFromPayload(payload: Record<string, unknown> | null | undefined, fallbackView?: StudioView | null, sourceType?: string) {
     const dispatch = resolveStudioDispatchFromPayload(payload);
     // Only update studio dispatch when the payload carries explicit studio
     // metadata (result_kind, requested_view, or studio.renderer).  Plain
@@ -3887,6 +3897,10 @@ export default function Page() {
       Boolean(dispatch.renderer);
     if (hasStudioIntent) {
       setStudioDispatch(dispatch);
+      // Save per-source renderer so other sources don't overwrite it
+      if (sourceType) {
+        setSourceRenderers((prev) => ({ ...prev, [sourceType]: dispatch }));
+      }
     }
     const resolvedView = resolveStudioRendererKey({
       activeView: fallbackView,
@@ -3901,110 +3915,22 @@ export default function Page() {
     }
   }
   const studioContext = useMemo(() => {
-    if (dicomAnalysis) {
-      const dicomCard = dicomAnalysis.artifacts?.dicom_review ?? null;
-      const metadata = Array.isArray(dicomAnalysis.metadata_items) ? dicomAnalysis.metadata_items[0] ?? null : null;
-      const preview = metadata?.preview ?? dicomCard?.preview ?? null;
-      return {
-        active_view: activeStudioView,
-        current_card: dicomCard,
-        current_summary: metadata
-          ? {
-              modality: metadata.modality ?? null,
-              patient_id: metadata.patient_id ?? null,
-              study_description: metadata.study_description ?? null,
-              series_description: metadata.series_description ?? null,
-            }
-          : null,
-        current_schema: [],
-        current_preview: preview
-          ? {
-              columns: ["preview_state"],
-              rows: [{ preview_state: String(preview.available ? "available" : preview.message ?? "not available") }],
-            }
-          : null,
-        current_warnings: Array.isArray(dicomAnalysis.warnings) ? dicomAnalysis.warnings.slice(0, 12) : [],
-        extra: {
-          metadata_items: dicomAnalysis.metadata_items,
-          series: dicomAnalysis.series,
-          preview,
-        },
-      };
-    }
-    if (spreadsheetAnalysis) {
-      const selectedSpreadsheetSheet =
-        typeof activeStudioView === "string" && activeStudioView.startsWith("sheet::") && activeStudioView.endsWith("::cohort_browser")
-          ? activeStudioView.slice("sheet::".length, -"::cohort_browser".length)
-          : spreadsheetAnalysis.selected_sheet;
-      const selectedSpreadsheetArtifact =
-        selectedSpreadsheetSheet && spreadsheetAnalysis.artifacts
-          ? spreadsheetAnalysis.artifacts[`sheet::${selectedSpreadsheetSheet}::cohort_browser`] ?? null
-          : null;
-      return {
-        active_view: activeStudioView,
-        current_card: selectedSpreadsheetArtifact,
-        current_summary: selectedSpreadsheetArtifact
-          ? {
-              selected_sheet: selectedSpreadsheetSheet,
-              overview: selectedSpreadsheetArtifact.overview ?? null,
-              intake: selectedSpreadsheetArtifact.intake ?? null,
-              composition: selectedSpreadsheetArtifact.composition ?? null,
-            }
-          : null,
-        current_schema:
-          selectedSpreadsheetArtifact && Array.isArray(selectedSpreadsheetArtifact.schema_highlights)
-            ? selectedSpreadsheetArtifact.schema_highlights.slice(0, 24)
-            : [],
-        current_preview: selectedSpreadsheetArtifact
-          ? {
-              columns: selectedSpreadsheetArtifact.grid?.columns ?? [],
-              rows: Array.isArray(selectedSpreadsheetArtifact.grid?.rows)
-                ? selectedSpreadsheetArtifact.grid.rows.slice(0, 60)
-                : [],
-            }
-          : null,
-        current_warnings: Array.isArray(selectedSpreadsheetArtifact?.warnings)
-          ? selectedSpreadsheetArtifact.warnings.slice(0, 12)
-          : Array.isArray(spreadsheetAnalysis.warnings)
-            ? spreadsheetAnalysis.warnings.slice(0, 12)
-            : [],
-        extra: {
-          sheet_count: spreadsheetAnalysis.sheet_count,
-          selected_sheet: selectedSpreadsheetSheet,
-          sheet_names: spreadsheetAnalysis.sheet_names,
-          sheet_details: spreadsheetAnalysis.sheet_details?.slice(0, 8),
-          current_sheet: selectedSpreadsheetArtifact
-            ? {
-                overview: selectedSpreadsheetArtifact.overview ?? null,
-                intake: selectedSpreadsheetArtifact.intake ?? null,
-                schema_highlights: Array.isArray(selectedSpreadsheetArtifact.schema_highlights)
-                  ? selectedSpreadsheetArtifact.schema_highlights.slice(0, 24)
-                  : [],
-                missingness: selectedSpreadsheetArtifact.missingness ?? null,
-                composition: selectedSpreadsheetArtifact.composition ?? null,
-                preview_columns: selectedSpreadsheetArtifact.grid?.columns ?? [],
-                preview_rows: Array.isArray(selectedSpreadsheetArtifact.grid?.rows)
-                  ? selectedSpreadsheetArtifact.grid.rows.slice(0, 60)
-                  : [],
-              }
-            : null,
-        },
-      };
-    }
-    if (!analysis) {
-      return {};
-    }
-    return {
-      active_view: activeStudioView,
-      current_card: selectedAnnotation
+    // Merge studio context from ALL active sources (multimodal-aware)
+    const merged: Record<string, any> = { active_view: activeStudioView };
+    const mergedExtra: Record<string, any> = {};
+    const allWarnings: any[] = [];
+
+    // --- VCF source ---
+    if (analysis) {
+      merged.current_card = selectedAnnotation
         ? {
             locus: `${selectedAnnotation.contig}:${selectedAnnotation.pos_1based}`,
             gene: selectedAnnotation.gene,
             rsid: selectedAnnotation.rsid,
             consequence: selectedAnnotation.consequence,
           }
-        : null,
-      current_summary: {
+        : null;
+      merged.current_summary = {
         qc_summary: {
           pass_rate: qcMetrics?.pass_rate,
           ti_tv: qcMetrics?.transition_transversion_ratio,
@@ -4013,9 +3939,8 @@ export default function Page() {
         },
         candidate_count: candidateVariants.length,
         roh_segment_count: analysis.roh_segments?.length ?? 0,
-      },
-      current_schema: [],
-      current_preview: {
+      };
+      merged.current_preview = {
         columns: ["locus", "gene", "rsid", "consequence", "clinical_significance", "gnomad_af", "score", "in_roh"],
         rows: candidateVariants.slice(0, 6).map(({ item, score, inRoh }) => ({
           locus: `${item.contig}:${item.pos_1based}`,
@@ -4027,9 +3952,9 @@ export default function Page() {
           score,
           in_roh: inRoh,
         })),
-      },
-      current_warnings: analysis.facts?.warnings?.slice(0, 12) ?? [],
-      extra: {
+      };
+      allWarnings.push(...(analysis.facts?.warnings?.slice(0, 12) ?? []));
+      Object.assign(mergedExtra, {
         qc_summary: {
           pass_rate: qcMetrics?.pass_rate,
           ti_tv: qcMetrics?.transition_transversion_ratio,
@@ -4083,60 +4008,172 @@ export default function Page() {
         clinvar_review: clinvarCounts.slice(0, 8),
         vep_consequence: consequenceCounts.slice(0, 10),
         snpeff_preview: analysis?.snpeff_result
-        ? {
-            genome: analysis.snpeff_result.genome,
-            parsed_records: analysis.snpeff_result.parsed_records.slice(0, 5).map((record) => ({
-              locus: `${record.contig}:${record.pos_1based}`,
-              ref: record.ref,
-              alt: record.alt,
-              ann: record.ann.slice(0, 2).map((ann) => ({
-                annotation: ann.annotation,
-                impact: ann.impact,
-                gene_name: ann.gene_name,
-                hgvs_c: ann.hgvs_c,
-                hgvs_p: ann.hgvs_p,
+          ? {
+              genome: analysis.snpeff_result.genome,
+              parsed_records: analysis.snpeff_result.parsed_records.slice(0, 5).map((record) => ({
+                locus: `${record.contig}:${record.pos_1based}`,
+                ref: record.ref,
+                alt: record.alt,
+                ann: record.ann.slice(0, 2).map((ann) => ({
+                  annotation: ann.annotation,
+                  impact: ann.impact,
+                  gene_name: ann.gene_name,
+                  hgvs_c: ann.hgvs_c,
+                  hgvs_p: ann.hgvs_p,
+                })),
               })),
-            })),
-          }
-        : null,
+            }
+          : null,
         liftover_preview: analysis?.liftover_result
-        ? {
-            source_build: analysis.liftover_result.source_build,
-            target_build: analysis.liftover_result.target_build,
-            lifted_record_count: analysis.liftover_result.lifted_record_count,
-            rejected_record_count: analysis.liftover_result.rejected_record_count,
-            warnings: analysis.liftover_result.warnings.slice(0, 6),
-          }
-        : null,
+          ? {
+              source_build: analysis.liftover_result.source_build,
+              target_build: analysis.liftover_result.target_build,
+              lifted_record_count: analysis.liftover_result.lifted_record_count,
+              rejected_record_count: analysis.liftover_result.rejected_record_count,
+              warnings: analysis.liftover_result.warnings.slice(0, 6),
+            }
+          : null,
         ldblockshow_preview: analysis?.ldblockshow_result
-        ? {
-            region: analysis.ldblockshow_result.region,
-            svg_path: analysis.ldblockshow_result.svg_path,
-            warnings: analysis.ldblockshow_result.warnings.slice(0, 6),
-          }
-        : null,
+          ? {
+              region: analysis.ldblockshow_result.region,
+              svg_path: analysis.ldblockshow_result.svg_path,
+              warnings: analysis.ldblockshow_result.warnings.slice(0, 6),
+            }
+          : null,
         plink_preview: analysis?.plink_result
-        ? {
-            output_prefix: analysis.plink_result.output_prefix,
-            sample_count: analysis.plink_result.sample_count,
-            variant_count: analysis.plink_result.variant_count,
-            warnings: analysis.plink_result.warnings.slice(0, 6),
-          }
-        : null,
+          ? {
+              output_prefix: analysis.plink_result.output_prefix,
+              sample_count: analysis.plink_result.sample_count,
+              variant_count: analysis.plink_result.variant_count,
+              warnings: analysis.plink_result.warnings.slice(0, 6),
+            }
+          : null,
         selected_annotation: selectedAnnotation
-        ? {
-            locus: `${selectedAnnotation.contig}:${selectedAnnotation.pos_1based}`,
-            gene: selectedAnnotation.gene,
-            rsid: selectedAnnotation.rsid,
-            consequence: selectedAnnotation.consequence,
-            clinical_significance: selectedAnnotation.clinical_significance,
-            gnomad_af: selectedAnnotation.gnomad_af,
-            hgvsc: selectedAnnotation.hgvsc,
-            hgvsp: selectedAnnotation.hgvsp,
-          }
-        : null,
-      },
-    };
+          ? {
+              locus: `${selectedAnnotation.contig}:${selectedAnnotation.pos_1based}`,
+              gene: selectedAnnotation.gene,
+              rsid: selectedAnnotation.rsid,
+              consequence: selectedAnnotation.consequence,
+              clinical_significance: selectedAnnotation.clinical_significance,
+              gnomad_af: selectedAnnotation.gnomad_af,
+              hgvsc: selectedAnnotation.hgvsc,
+              hgvsp: selectedAnnotation.hgvsp,
+            }
+          : null,
+      });
+    }
+
+    // --- DICOM source ---
+    if (dicomAnalysis) {
+      const dicomCard = dicomAnalysis.artifacts?.dicom_review ?? null;
+      const metadata = Array.isArray(dicomAnalysis.metadata_items) ? dicomAnalysis.metadata_items[0] ?? null : null;
+      const preview = metadata?.preview ?? dicomCard?.preview ?? null;
+      if (!analysis) {
+        // Only set current_card/current_summary if VCF didn't already
+        merged.current_card = dicomCard;
+        merged.current_summary = metadata
+          ? {
+              modality: metadata.modality ?? null,
+              patient_id: metadata.patient_id ?? null,
+              study_description: metadata.study_description ?? null,
+              series_description: metadata.series_description ?? null,
+            }
+          : null;
+        merged.current_preview = preview
+          ? {
+              columns: ["preview_state"],
+              rows: [{ preview_state: String(preview.available ? "available" : preview.message ?? "not available") }],
+            }
+          : null;
+      }
+      allWarnings.push(...(Array.isArray(dicomAnalysis.warnings) ? dicomAnalysis.warnings.slice(0, 12) : []));
+      mergedExtra.dicom = {
+        metadata_items: dicomAnalysis.metadata_items,
+        series: dicomAnalysis.series,
+        preview,
+        current_card: dicomCard,
+        current_summary: metadata
+          ? {
+              modality: metadata.modality ?? null,
+              patient_id: metadata.patient_id ?? null,
+              study_description: metadata.study_description ?? null,
+              series_description: metadata.series_description ?? null,
+            }
+          : null,
+      };
+    }
+
+    // --- Spreadsheet source ---
+    if (spreadsheetAnalysis) {
+      const selectedSpreadsheetSheet =
+        typeof activeStudioView === "string" && activeStudioView.startsWith("sheet::") && activeStudioView.endsWith("::cohort_browser")
+          ? activeStudioView.slice("sheet::".length, -"::cohort_browser".length)
+          : spreadsheetAnalysis.selected_sheet;
+      const selectedSpreadsheetArtifact =
+        selectedSpreadsheetSheet && spreadsheetAnalysis.artifacts
+          ? spreadsheetAnalysis.artifacts[`sheet::${selectedSpreadsheetSheet}::cohort_browser`] ?? null
+          : null;
+      if (!analysis && !dicomAnalysis) {
+        merged.current_card = selectedSpreadsheetArtifact;
+        merged.current_summary = selectedSpreadsheetArtifact
+          ? {
+              selected_sheet: selectedSpreadsheetSheet,
+              overview: selectedSpreadsheetArtifact.overview ?? null,
+              intake: selectedSpreadsheetArtifact.intake ?? null,
+              composition: selectedSpreadsheetArtifact.composition ?? null,
+            }
+          : null;
+        merged.current_schema =
+          selectedSpreadsheetArtifact && Array.isArray(selectedSpreadsheetArtifact.schema_highlights)
+            ? selectedSpreadsheetArtifact.schema_highlights.slice(0, 24)
+            : [];
+        merged.current_preview = selectedSpreadsheetArtifact
+          ? {
+              columns: selectedSpreadsheetArtifact.grid?.columns ?? [],
+              rows: Array.isArray(selectedSpreadsheetArtifact.grid?.rows)
+                ? selectedSpreadsheetArtifact.grid.rows.slice(0, 60)
+                : [],
+            }
+          : null;
+      }
+      allWarnings.push(
+        ...(Array.isArray(selectedSpreadsheetArtifact?.warnings)
+          ? selectedSpreadsheetArtifact.warnings.slice(0, 12)
+          : Array.isArray(spreadsheetAnalysis.warnings)
+            ? spreadsheetAnalysis.warnings.slice(0, 12)
+            : []),
+      );
+      mergedExtra.spreadsheet = {
+        sheet_count: spreadsheetAnalysis.sheet_count,
+        selected_sheet: selectedSpreadsheetSheet,
+        sheet_names: spreadsheetAnalysis.sheet_names,
+        sheet_details: spreadsheetAnalysis.sheet_details?.slice(0, 8),
+        current_sheet: selectedSpreadsheetArtifact
+          ? {
+              overview: selectedSpreadsheetArtifact.overview ?? null,
+              intake: selectedSpreadsheetArtifact.intake ?? null,
+              schema_highlights: Array.isArray(selectedSpreadsheetArtifact.schema_highlights)
+                ? selectedSpreadsheetArtifact.schema_highlights.slice(0, 24)
+                : [],
+              missingness: selectedSpreadsheetArtifact.missingness ?? null,
+              composition: selectedSpreadsheetArtifact.composition ?? null,
+              preview_columns: selectedSpreadsheetArtifact.grid?.columns ?? [],
+              preview_rows: Array.isArray(selectedSpreadsheetArtifact.grid?.rows)
+                ? selectedSpreadsheetArtifact.grid.rows.slice(0, 60)
+                : [],
+            }
+          : null,
+      };
+    }
+
+    if (!analysis && !dicomAnalysis && !spreadsheetAnalysis) {
+      return {};
+    }
+
+    merged.current_schema = merged.current_schema ?? [];
+    merged.current_warnings = allWarnings;
+    merged.extra = mergedExtra;
+    return merged;
   }, [
     activeStudioView,
     analysis,
