@@ -292,7 +292,7 @@ def _run_source_bootstrap(
     durable_path: Path,
     file_name: str,
     **kwargs: object,
-) -> AnalysisResponse | DicomSourceResponse | RawQcResponse | SpreadsheetSourceResponse | SummaryStatsResponse | TextSourceResponse | FhirSourceResponse:
+) -> AnalysisResponse | DicomSourceResponse | ImageSourceResponse | RawQcResponse | SpreadsheetSourceResponse | SummaryStatsResponse | TextSourceResponse | FhirSourceResponse:
     bootstrap_source_type = source_bootstrap_type(source_type)
     if load_bootstrap_manifest(bootstrap_source_type) is None:
         raise HTTPException(status_code=500, detail=f"The {source_type} bootstrap manifest is not available.")
@@ -311,6 +311,7 @@ def _run_source_bootstrap(
             "spreadsheet": "Spreadsheet intake",
             "text": "Text intake",
             "dicom": "DICOM intake",
+            "image": "Image intake",
             "fhir": "FHIR intake",
         }.get(source_type, "Bootstrap analysis")
         raise HTTPException(status_code=400, detail=f"{label} failed: {exc}") from exc
@@ -321,7 +322,7 @@ def _persist_and_bootstrap_upload(
     file_name: str,
     data: bytes,
     **kwargs: object,
-) -> AnalysisResponse | DicomSourceResponse | RawQcResponse | SpreadsheetSourceResponse | SummaryStatsResponse | TextSourceResponse | FhirSourceResponse:
+) -> AnalysisResponse | DicomSourceResponse | ImageSourceResponse | RawQcResponse | SpreadsheetSourceResponse | SummaryStatsResponse | TextSourceResponse | FhirSourceResponse:
     bootstrap_source_type = source_bootstrap_type(source_type)
     durable_path = persist_uploaded_source_bytes(bootstrap_source_type, file_name, data)
     return _run_source_bootstrap(source_type, durable_path, file_name, **kwargs)

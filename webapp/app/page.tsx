@@ -4742,6 +4742,8 @@ export default function Page() {
                                       : st === "dicom" ? "Active DICOM source"
                                       : st === "text" ? "Active text source"
                                       : st === "summary_stats" ? "Active summary statistics source"
+                                      : st === "image" ? "Active image source"
+                                      : st === "fhir" ? "Active FHIR source"
                                       : "Active VCF source";
                                   })()}
                             </p>
@@ -4758,6 +4760,8 @@ export default function Page() {
                                 : src.sourceType === "dicom" ? "DICOM"
                                 : src.sourceType === "text" ? "Text"
                                 : src.sourceType === "summary_stats" ? "Summary Stats"
+                                : src.sourceType === "image" ? "Image"
+                                : src.sourceType === "fhir" ? "FHIR"
                                 : src.sourceType;
                               return (
                                 <article key={`src-${idx}`} className="sourceItem" style={{ opacity: 0.9, marginBottom: 4 }}>
