@@ -527,6 +527,7 @@ def get_output_file(path: str = Query(..., description="Absolute path to a gener
         FASTQC_OUTPUT_DIR.resolve(),
         LDBLOCKSHOW_OUTPUT_DIR.resolve(),
         (UPLOAD_ROOT / "text").resolve(),
+        (UPLOAD_ROOT / "nifti").resolve(),
     ]
     if not any(root == file_path or root in file_path.parents for root in allowed_roots):
         raise HTTPException(status_code=403, detail="Access to the requested file is not allowed.")

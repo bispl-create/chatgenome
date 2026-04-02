@@ -4233,6 +4233,7 @@ export default function Page() {
       dicomAnalysis ||
       textAnalysis ||
       imageAnalysis ||
+      niftiAnalysis ||
       fhirAnalysis ||
       prsPrepResultForStudio ||
       qqmanResultForStudio ||

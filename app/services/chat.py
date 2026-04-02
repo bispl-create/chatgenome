@@ -873,6 +873,28 @@ def _compact_fhir_context(payload: FhirChatRequest, **kwargs: Any) -> dict[str, 
     return context
 
 
+def _compact_nifti_context(payload: NiftiChatRequest) -> dict[str, object]:
+    a = payload.analysis
+    context: dict[str, object] = {
+        "analysis_id": a.analysis_id,
+        "file_name": a.file_name,
+        "file_kind": a.file_kind,
+        "shape": a.shape,
+        "voxel_dims": a.voxel_dims,
+        "fov_mm": a.fov_mm,
+        "orientation": a.orientation,
+        "datatype": a.datatype,
+        "is_4d": a.is_4d,
+        "metadata_items": a.metadata_items[:12] if a.metadata_items else [],
+        "warnings": a.warnings[:12] if a.warnings else [],
+        "draft_answer": a.draft_answer,
+        "used_tools": a.used_tools,
+    }
+    if payload.studio_context:
+        context["studio_context"] = _flatten_studio_context(payload.studio_context)
+    return context
+
+
 CHAT_OPENAI_CONFIG: dict[str, dict[str, Any]] = {
     "vcf": {
         "context_label": "Analysis context JSON",
@@ -987,6 +1009,22 @@ CHAT_OPENAI_CONFIG: dict[str, dict[str, Any]] = {
             "You are a helpful general assistant. "
             "The user did not request grounded image reasoning. "
             "Answer from general knowledge only."
+        ),
+    },
+    "nifti": {
+        "context_label": "NIfTI volume context JSON",
+        "compact_context_builder": _compact_nifti_context,
+        "grounded_system_prompt": (
+            "You are a neuroimaging and NIfTI volume analysis copilot. "
+            "The user explicitly requested grounded reasoning via a trigger such as $studio or $current analysis. "
+            "Answer only from the provided NIfTI context including shape, voxel dimensions, FOV, orientation, and data type. "
+            "Do not invent imaging findings or clinical interpretations that are not present in the provided context. "
+            "Be concise and cite volume properties when relevant."
+        ),
+        "general_system_prompt": (
+            "You are a helpful general assistant. "
+            "The user did not request grounded NIfTI reasoning. "
+            "Answer from general knowledge only and ignore any uploaded NIfTI context unless the user explicitly asks with a grounding trigger such as $studio."
         ),
     },
     "fhir": {
