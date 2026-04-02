@@ -120,7 +120,8 @@ After adding the plugin files, make sure you also:
    - add `workflow_binding` before adding bespoke workflow code
    - avoid changing [../app/main.py](../app/main.py), [../app/services/chat.py](../app/services/chat.py), or [../app/services/workflows.py](../app/services/workflows.py) unless the tool introduces a genuinely new behavior type
 3. add Studio rendering in
-   - [../webapp/app/page.tsx](../webapp/app/page.tsx)
+   - [../webapp/app/components/studioRenderers.tsx](../webapp/app/components/studioRenderers.tsx) (register renderer key)
+   - [../webapp/app/components/customStudioRenderers.tsx](../webapp/app/components/customStudioRenderers.tsx) or [../webapp/app/components/genericStudioRenderers.tsx](../webapp/app/components/genericStudioRenderers.tsx) (add card component)
 4. update orchestrator policy in
    - [../skills/chatgenome-orchestrator/SKILL.md](../skills/chatgenome-orchestrator/SKILL.md)
    if the tool should be recommended or used in workflows
@@ -130,17 +131,14 @@ After adding the plugin files, make sure you also:
 Python syntax:
 
 ```bash
-PYTHONPATH=/Users/jongcye/Documents/Codex/.vendor PYTHONPYCACHEPREFIX=/tmp python3 -m py_compile app/main.py app/models.py app/services/*.py plugins/<tool_folder>/logic.py
-
-# if you keep a compatibility wrapper:
-PYTHONPATH=/Users/jongcye/Documents/Codex/.vendor PYTHONPYCACHEPREFIX=/tmp python3 -m py_compile plugins/<tool_folder>/run.py
+python3 -m py_compile app/main.py app/models.py app/services/*.py plugins/<tool_folder>/logic.py
 ```
 
 Frontend build:
 
 ```bash
 cd webapp
-PATH=/Users/jongcye/Documents/Codex/.local/node/node-v22.22.1-darwin-arm64/bin:$PATH npm run build:local
+npm run build
 ```
 
 Runtime checks:

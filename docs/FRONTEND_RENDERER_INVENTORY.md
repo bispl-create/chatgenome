@@ -2,7 +2,7 @@
 
 ## Goal
 
-Inventory the current Studio rendering in `webapp/app/page.tsx` to determine:
+Inventory the current Studio rendering to determine:
 
 - Which parts can be absorbed into a generic renderer
 - Which parts must remain as custom cards
@@ -10,14 +10,11 @@ Inventory the current Studio rendering in `webapp/app/page.tsx` to determine:
 
 ## Current Studio Surface
 
-Studio views are dispatched through the `StudioView` union and a renderer registry (`studioRenderers.tsx`).
+Studio views are dispatched through a renderer registry (`studioRenderers.tsx`).
 
-Current renderer categories:
+Current registered renderer keys (from `STUDIO_RENDERER_METADATA`):
 
-- **Generic renderers** (`genericStudioRenderers.tsx`): reusable metric/list/artifact/table cards
-- **Custom renderers** (`customStudioRenderers.tsx`): domain-specific cards with interactive state
-
-Current StudioView values include: `qc`, `candidates`, `annotations`, `clinvar`, `vep`, `roh`, `symbolic`, `rawqc`, `sumstats`, `prs_prep`, `qqman`, `samtools`, `snpeff`, `plink`, `liftover`, `ldblockshow`, `dicom_review`, `image_review`, `fhir_browser`, `text_review`, `cohort_browser`, and others.
+`rawqc`, `text`, `dicom_review`, `image_review`, `cohort_browser`, `sumstats`, `samtools`, `prs_prep`, `qqman`, `provenance`, `qc`, `coverage`, `snpeff`, `plink`, `liftover`, `ldblockshow`, `candidates`, `acmg`, `table`, `symbolic`, `roh`, `clinvar`, `vep`, `references`, `igv`, `annotations`, `fhir_browser`
 
 ## Source Shell
 
@@ -58,10 +55,12 @@ Views that present tabular data with optional search/filter:
 Views with strong interaction, navigation, or domain-specific rendering:
 
 - `candidates` — variant ranking with scoring/triage
+- `acmg` — ACMG classification review
 - `annotations` — annotation dropdown, search, detail card
 - `roh` — ROH segment review
 - `symbolic` — symbolic ALT review
 - `clinvar` — clinical significance distribution
+- `references` — literature reference cards
 - `igv` — browser embed (future)
 
 ### Family D. Domain custom cards (clinical/imaging)
@@ -69,7 +68,7 @@ Views with strong interaction, navigation, or domain-specific rendering:
 - `dicom_review` — DICOM metadata, series summary, viewer
 - `image_review` — image metadata, EXIF, thumbnail preview
 - `fhir_browser` — patient hero, allergies, vitals, medications, labs, care team
-- `text_review` — markdown preview with full text
+- `text` — markdown preview with full text
 - `cohort_browser` — spreadsheet sheets, schema, missingness
 
 ### Family E. Workflow-specific cards
@@ -77,6 +76,7 @@ Views with strong interaction, navigation, or domain-specific rendering:
 - `plink` — execution form with qc/score modes
 - `prs_prep` — build check, harmonization, score-file preview
 - `rawqc` — FastQC module review with report actions
+- `provenance` — tool execution provenance/audit trail
 
 ## Existing Reusable Primitives
 
@@ -93,16 +93,21 @@ Components extracted into shared modules:
 
 The current dispatch flow:
 
-1. `studioRenderers.tsx` — `STUDIO_RENDERER_METADATA` maps renderer keys to requested views
-2. `resolveStudioRendererKey()` — resolves payload to a renderer key
-3. `buildStudioRendererRegistry()` — builds a component registry
-4. `customStudioRenderers.tsx` — domain-specific card implementations
-5. `genericStudioRenderers.tsx` — reusable card implementations
+1. `studioRenderers.tsx` — `STUDIO_RENDERER_METADATA` maps renderer keys to `requestedViews` and `resultKinds`
+2. `resolveStudioDispatchFromPayload()` — extracts `requestedView`, `resultKind`, and `renderer` from backend payload
+3. `resolveStudioRendererKey()` — resolves active view or dispatch info to a renderer key via priority chain:
+   - `findRendererKeyByRequestedView(activeView)`
+   - `findRendererKeyByRequestedView(dispatch.renderer)`
+   - `findRendererKeyByRequestedView(dispatch.requestedView)`
+   - `findRendererKeyByResultKind(dispatch.resultKind)`
+4. `buildStudioRendererRegistry()` — merges generic and custom renderer registries into one component map
+5. `customStudioRenderers.tsx` — domain-specific card implementations
+6. `genericStudioRenderers.tsx` — reusable card implementations
 
 Adding a new renderer requires:
-1. Add entry to `STUDIO_RENDERER_METADATA`
+1. Add entry to `STUDIO_RENDERER_METADATA` in `studioRenderers.tsx`
 2. Add component to custom or generic renderers
-3. Register in `buildStudioRendererRegistry()`
+3. The component is automatically available via `buildStudioRendererRegistry()`
 
 ## Migration Status
 
@@ -112,6 +117,7 @@ Adding a new renderer requires:
 - Direct tool results use `DirectToolResultCard`
 - Text, DICOM, image, FHIR, spreadsheet renderers use dedicated components
 - Renderer dispatch is registry-based, not conditional branches
+- Dispatch flow uses `resolveStudioDispatchFromPayload()` + `resolveStudioRendererKey()` priority chain
 
 ### Remaining
 
