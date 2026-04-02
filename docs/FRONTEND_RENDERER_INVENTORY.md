@@ -61,7 +61,7 @@ Views with strong interaction, navigation, or domain-specific rendering:
 - `symbolic` — symbolic ALT review
 - `clinvar` — clinical significance distribution
 - `references` — literature reference cards
-- `igv` — browser embed (future)
+- `igv` — IGV genome browser embed (`IgvBrowser.tsx`)
 
 ### Family D. Domain custom cards (clinical/imaging)
 
@@ -123,4 +123,3 @@ Adding a new renderer requires:
 
 - Some VCF-specific views still rendered inline in `page.tsx`
 - Further extraction of shared primitives (metric grid, distribution panel) possible
-- IGV viewer card not yet implemented
